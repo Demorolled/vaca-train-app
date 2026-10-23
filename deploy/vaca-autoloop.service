@@ -1,0 +1,19 @@
+[Unit]
+Description=VACA autoloop (probe, mine, train, score, judge, escalate)
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Change this line (and the next) if the clone lives elsewhere.
+WorkingDirectory=%h/vaca-train-app/vaca-train-app
+Environment=PYTHONPATH=%h/vaca-train-app/vaca-train-app
+ExecStart=%h/vaca-train-venv/bin/python -m trainapp.autoloop --cycles 3 --hours 6
+Restart=on-failure
+RestartSec=120
+# A rejected cycle escalates a lever; a crash restarts the cycle it was in, and
+# the journal already holds every finished one.
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

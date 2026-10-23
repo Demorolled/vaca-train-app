@@ -1,0 +1,33 @@
+{
+  "seeds": 3,
+  "candidates": 9,
+  "accepted": 1,
+  "rejected": {
+    "invalid": 6,
+    "identical": 1,
+    "behavior_mismatch": 0,
+    "tie": 0,
+    "lost": 0,
+    "no_improvement": 0,
+    "duplicate": 1,
+    "judge_error": 0,
+    "coder_failed": 0
+  },
+  "accepted_tasks": [
+    {
+      "id": "grown/rosetta-fizzbuzz-go-3705b1ac-idiomatic-4721d9fb",
+      "seed": "rosetta/rosetta-fizzbuzz-go-3705b1ac",
+      "language": "go",
+      "style": "idiomatic",
+      "bytes": 280,
+      "reference_bytes": 317,
+      "runtime_ms": 91,
+      "reference_runtime_ms": 100,
+      "improvement": "smaller",
+      "reason": "Both implementations are correct, but B is smaller (280 bytes vs 317 bytes) and faster (91 ms vs 100 ms), while maintaining the same functionality and output format as the reference."
+    }
+  ],
+  "avg_bytes": 280,
+  "avg_reference_bytes": 317,
+  "finished_at": "2026-10-22T02:39:06+00:00"
+}

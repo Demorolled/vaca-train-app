@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Model weights (~1.8 GB) — rebuilt by train_lora.py, never committed.
+data/models/
+data/runs/
+
+# Generated measurement artefacts: rebuilt by the probes, puzzles, tournament
+# and gate runners, so they stay out of version control.
+data/puzzles/
+data/tournament/
+data/battery/
+data/probes/
+data/overnight/
+data/selfplay/
+data/repair-experiment/
+data/nodes/
+data/trainloop/
+data/grow.status.json
+data/tournament.status.json
+data/trainloop.status.json
+
+*.log

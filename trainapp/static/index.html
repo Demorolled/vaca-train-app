@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Train App</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="dot"></span>
+    <strong>Train App</strong>
+    <span class="sub">language-agnostic harness → verified corrections → LoRA</span>
+  </div>
+  <div id="platform" class="pill">checking…</div>
+</header>
+
+<main>
+  <!-- nodes ------------------------------------------------------------- -->
+  <section class="panel nodes">
+    <div class="panel-head">
+      <h2>Nodes</h2>
+      <button id="new-node" class="ghost" title="Add a file node">+</button>
+    </div>
+    <form id="new-node-form" class="hidden">
+      <input id="new-node-name" placeholder="hello.py" autocomplete="off" />
+      <button type="submit">Create</button>
+    </form>
+    <ul id="node-list" class="list"></ul>
+    <p class="hint">One node = one file. The harness only runs it.</p>
+  </section>
+
+  <!-- editor ------------------------------------------------------------ -->
+  <section class="panel editor">
+    <div class="panel-head">
+      <h2 id="node-title">No node selected</h2>
+      <span id="node-lang" class="pill"></span>
+    </div>
+    <label class="field">
+      <span>Goal (optional — the memo the model also sees)</span>
+      <input id="goal" placeholder="a CLI that converts celsius to fahrenheit" autocomplete="off" />
+    </label>
+    <textarea id="code" spellcheck="false" placeholder="Pick a node on the left, or create one."></textarea>
+    <div class="actions">
+      <button id="save">Save</button>
+      <button id="run">Run</button>
+      <button id="fix" class="primary">Fix with LLM</button>
+      <span id="editor-status" class="status"></span>
+    </div>
+    <div class="console-head">
+      <h3>Harness output</h3>
+      <span id="run-meta" class="pill"></span>
+    </div>
+    <pre id="console" class="console">Run a node to see its exit code and output.</pre>
+  </section>
+
+  <!-- learning + training ----------------------------------------------- -->
+  <section class="panel side">
+    <div class="block">
+      <div class="panel-head"><h2>Toolchains</h2></div>
+      <ul id="toolchains" class="list toolchains"></ul>
+    </div>
+
+    <div class="block">
+      <div class="panel-head">
+        <h2>Dataset</h2>
+        <button id="export" class="ghost" title="Write train/val jsonl">Export</button>
+      </div>
+      <div id="dataset" class="stats">loading…</div>
+      <p class="hint">Only fixes that go fail → pass are captured.</p>
+    </div>
+
+    <div class="block">
+      <div class="panel-head"><h2>VACA library</h2><span id="lib-count" class="pill">—</span></div>
+      <div id="lib-stats" class="stats">not ingested</div>
+      <div class="actions">
+        <button id="lib-build" class="ghost">Ingest</button>
+        <button id="lib-validate" class="primary">Validate all</button>
+      </div>
+      <div class="actions">
+        <input id="grow-seeds" type="number" min="1" max="50" value="3" title="seed tasks" />
+        <button id="grow-start">Grow library</button>
+      </div>
+      <div class="bar"><div id="val-bar"></div></div>
+      <div id="val-status" class="stats">—</div>
+      <div id="grow-status" class="stats">growth: idle</div>
+      <div id="judge-status" class="stats">judge: —</div>
+    </div>
+
+    <div class="block">
+      <div class="panel-head"><h2>Style tournament</h2><span id="tour-state" class="pill">idle</span></div>
+      <label class="field compact">
+        <span>Tasks</span>
+        <input id="tour-tasks" type="number" min="1" max="50" value="5" />
+      </label>
+      <div class="actions">
+        <button id="tour-start" class="primary">Run tournament</button>
+      </div>
+      <pre id="tour-log" class="console small">No tournament yet.</pre>
+    </div>
+
+    <div class="block">
+      <div class="panel-head"><h2>Train</h2><span id="train-state" class="pill">idle</span></div>
+      <label class="field compact">
+        <span>Backend</span>
+        <select id="train-backend">
+          <option value="agent">agent box (ssh)</option>
+          <option value="local">this machine</option>
+        </select>
+      </label>
+      <label class="field compact">
+        <span>Mode</span>
+        <select id="train-mode">
+          <option value="sft">SFT — verified rows</option>
+          <option value="orpo">ORPO — judged pairs</option>
+        </select>
+      </label>
+      <label class="field compact">
+        <span>Model</span>
+        <input id="train-model" autocomplete="off" />
+      </label>
+      <label class="field compact">
+        <span>Max steps</span>
+        <input id="train-steps" type="number" min="1" max="5000" />
+      </label>
+      <div class="actions">
+        <button id="train-start" class="primary">Start</button>
+        <button id="train-stop" class="ghost">Stop</button>
+      </div>
+      <pre id="train-log" class="console small">No training run yet.</pre>
+    </div>
+  </section>
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

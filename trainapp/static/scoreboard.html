@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>VACA trainer — scoreboard</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px; background: #0f1115; color: #d8dee9;
+         font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  h1 { font-size: 18px; margin: 0 0 4px; letter-spacing: .04em; }
+  h2 { font-size: 13px; margin: 26px 0 8px; color: #8fa1b3; text-transform: uppercase; letter-spacing: .08em; }
+  .sub { color: #6b7a8c; margin-bottom: 18px; }
+  .cards { display: flex; gap: 12px; flex-wrap: wrap; }
+  .card { background: #161a21; border: 1px solid #232a35; border-radius: 8px; padding: 10px 14px; min-width: 132px; }
+  .card .n { font-size: 20px; color: #e5e9f0; }
+  .card .k { color: #6b7a8c; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid #1d232c; white-space: nowrap; }
+  th { color: #6b7a8c; font-weight: 500; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+  td:first-child, th:first-child { text-align: left; }
+  tr:hover td { background: #141821; }
+  .bar { position: relative; height: 6px; background: #1d232c; border-radius: 3px; min-width: 80px; }
+  .bar > i { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: #4c9f70; }
+  .bar.low > i { background: #b06a3b; }
+  .bar.bad > i { background: #a04444; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #3d4757; margin-right: 6px; }
+  .dot.on { background: #4c9f70; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+  .row { display: flex; justify-content: space-between; border-bottom: 1px solid #1d232c; padding: 4px 0; }
+  .muted { color: #6b7a8c; }
+  .ok { color: #6fbf8b; } .warn { color: #d9a05b; } .bad { color: #d07373; }
+  .pill { display: inline-block; padding: 1px 7px; border-radius: 9px; background: #1d232c; font-size: 11px; }
+  footer { margin-top: 28px; color: #59636f; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>VACA trainer — scoreboard</h1>
+<div class="sub" id="stamp">loading…</div>
+
+<div class="cards" id="cards"></div>
+
+<h2>Coverage by language</h2>
+<table id="langs"><thead><tr>
+  <th>language</th><th>tasks</th><th>verified</th><th>rate</th>
+  <th>base builds</th><th>base verified</th><th>file sets</th><th>sets verified</th><th>puzzle scored</th>
+</tr></thead><tbody></tbody></table>
+
+<h2>Where the tasks come from</h2>
+<table id="origins"><thead><tr>
+  <th>origin</th><th>tasks</th><th>verified</th><th>rate</th>
+</tr></thead><tbody></tbody></table>
+
+<h2>Training data</h2>
+<div class="grid" id="datasets"></div>
+
+<h2>Exemplar ranking (puzzle clean score)</h2>
+<table id="puzzles"><thead><tr>
+  <th>app</th><th>clean</th><th>nodes</th><th>mutants caught</th><th>avg bytes</th>
+</tr></thead><tbody></tbody></table>
+
+<h2>Live jobs</h2>
+<div class="grid" id="runs"></div>
+
+<footer>Auto-refresh 15 s · <span id="api"></span></footer>
+
+<script>
+const pct = (n, d) => d ? (100 * n / d) : 0;
+const cls = p => p >= 80 ? "" : p >= 40 ? "low" : "bad";
+const esc = s => String(s ?? "").replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
+
+function card(n, k) { return `<div class="card"><div class="n">${n}</div><div class="k">${k}</div></div>`; }
+
+function render(d) {
+  document.getElementById("stamp").textContent =
+    `${d.library.tasks} tasks · ${d.library.confirmed} confirmed · ${d.library.multi_file} file sets · ${d.library.puzzle_scored} apps puzzle-scored · generated ${d.generated_at}`;
+  document.getElementById("cards").innerHTML =
+    card(d.library.tasks, "library tasks") +
+    card(d.library.confirmed, "proven by toolchain") +
+    card(d.library.multi_file, "multi-file sets") +
+    card(d.datasets.sft_train, "SFT train rows") +
+    card(d.datasets.sft_val, "SFT val rows") +
+    card(d.datasets.pair_train, "ORPO train pairs") +
+    card(d.datasets.app_knowledge, "app knowledge rows") +
+    card(Number(d.puzzles.mean_clean).toFixed(3), "mean clean score");
+
+  document.querySelector("#langs tbody").innerHTML = d.library.by_language.map(r => {
+    const rate = pct(r.verified, r.tasks);
+    const tool = d.toolchains[r.language] ? "on" : "";
+    return `<tr>
+      <td><span class="dot ${tool}" title="toolchain"></span>${esc(r.language)}</td>
+      <td>${r.tasks}</td><td>${r.verified}</td>
+      <td><div class="bar ${cls(rate)}"><i style="width:${rate.toFixed(0)}%"></i></div> <span class="muted">${rate.toFixed(0)}%</span></td>
+      <td>${r.base_builds}</td><td>${r.base_verified}</td>
+      <td>${r.file_sets}</td><td>${r.sets_verified}</td>
+      <td>${r.puzzle_scored || ""}</td>
+    </tr>`;
+  }).join("");
+
+  document.querySelector("#origins tbody").innerHTML = d.library.by_origin.map(r => {
+    const rate = pct(r.verified, r.tasks);
+    return `<tr><td>${esc(r.origin)}</td><td>${r.tasks}</td><td>${r.verified}</td>
+      <td><div class="bar ${cls(rate)}"><i style="width:${rate.toFixed(0)}%"></i></div>
+      <span class="muted">${rate.toFixed(0)}%</span></td></tr>`;
+  }).join("");
+
+  document.getElementById("datasets").innerHTML = Object.entries(d.datasets)
+    .map(([k, v]) => `<div class="row"><span class="muted">${esc(k)}</span><span>${v}</span></div>`)
+    .join("");
+
+  const rows = [...(d.puzzles.top || [])];
+  const weakest = (d.puzzles.weakest || []).filter(w => !rows.some(r => r.task_id === w.task_id));
+  document.querySelector("#puzzles tbody").innerHTML = rows.concat(weakest).map((r, i) => {
+    const name = (r.task_id || "").replace(/^vaca-export\//, "").slice(0, 56);
+    const weak = i >= rows.length;
+    return `<tr><td class="${weak ? "warn" : ""}">${esc(name)}${weak ? ' <span class="pill">weakest</span>' : ""}</td>
+      <td class="${r.clean >= 0.9 ? "ok" : r.clean >= 0.7 ? "warn" : "bad"}">${Number(r.clean).toFixed(3)}</td>
+      <td>${r.nodes}</td><td>${r.caught}/${r.nodes}</td><td>${r.avg_bytes}</td></tr>`;
+  }).join("") || `<tr><td colspan="5" class="muted">no apps scored yet — run <code>python3 -m trainapp.puzzles --to-library</code></td></tr>`;
+
+  const t = d.runs.tournament || {}, v = d.runs.validate || {}, tr = d.runs.training || {};
+  const bar = (state, done, total, label) => {
+    const p = total ? pct(done, total) : 0;
+    return `<div><div class="row"><span class="muted">${label}</span>
+      <span>${esc(state || "idle")} ${done || 0}/${total || 0}</span></div>
+      <div class="bar ${cls(p)}"><i style="width:${p.toFixed(0)}%"></i></div></div>`;
+  };
+  document.getElementById("runs").innerHTML =
+    bar(t.state, t.done, t.tasks, "tournament") +
+    bar(v.state, v.done, v.total, "validation") +
+    `<div><div class="row"><span class="muted">training</span><span>${esc(tr.state || "idle")}</span></div>
+      <div class="muted">${esc((tr.error || "").slice(0, 80))}</div></div>`;
+  document.getElementById("api").textContent = "/api/scoreboard";
+}
+
+async function tick() {
+  try {
+    const r = await fetch("/api/scoreboard", { cache: "no-store" });
+    if (!r.ok) throw new Error(r.status);
+    render(await r.json());
+  } catch (e) {
+    document.getElementById("stamp").textContent = "scoreboard unavailable: " + e;
+  }
+}
+tick(); setInterval(tick, 15000);
+</script>
+</body>
+</html>

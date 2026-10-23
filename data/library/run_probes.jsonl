@@ -1,0 +1,28 @@
+{"task_id": "vaca-export/a-habit-tracker-app-with-streaks-and-reminders-main-ts-91c14ee6", "language": "typescript", "args": [], "stdout": "Habits: []"}
+{"task_id": "vaca-export/a-javascript-cli-that-computes-the-sha-256-hash-of-every-file-in-a-dir-build-cli-9148df20", "language": "javascript", "args": [], "stdout": "{\"success\":\"Input is undefined\"}"}
+{"task_id": "vaca-export/a-meeting-scheduler-app-in-typescript-schedule-meetings-with-start-en-main-ts-d07e6d83", "language": "typescript", "args": [], "stdout": "Meeting Scheduler started. Use `add` to schedule and `list` to view meetings."}
+{"task_id": "vaca-export/a-node-js-javascript-cli-that-prints-the-first-12-fibonacci-numbers-index-js-a992d1d3", "language": "javascript", "args": [], "stdout": "0 1 1 2 3 5 8 13 21 34 55 89"}
+{"task_id": "vaca-export/a-node-js-javascript-cli-that-prints-the-first-12-fibonacci-numbers-index-js-badfff19", "language": "javascript", "args": [], "stdout": "0 1 1 2 3 5 8 13 21 34 55 89"}
+{"task_id": "vaca-export/a-node-js-javascript-cli-that-prints-the-first-12-fibonacci-numbers-index-js-2b539f5c", "language": "javascript", "args": [], "stdout": "0 1 1 2 3 5 8 13 21 34 55 89"}
+{"task_id": "vaca-export/a-node-js-javascript-cli-that-prints-the-first-12-fibonacci-numbers-fibonacci-cl-472f6bc2", "language": "javascript", "args": [], "stdout": "0 1 1 2 3 5 8 13 21 34 55 89"}
+{"task_id": "vaca-export/a-node-js-javascript-cli-that-prints-the-first-12-fibonacci-numbers-cli-entry-js-ce6bb17e", "language": "javascript", "args": [], "stdout": "0 1 1 2 3 5 8 13 21 34 55 89"}
+{"task_id": "vaca-export/a-node-js-javascript-cli-that-reverses-a-string-passed-on-the-command-entry-ts-9763a1da", "language": "typescript", "args": ["--help"], "stdout": "pleh--"}
+{"task_id": "vaca-export/a-node-js-javascript-cli-that-reverses-a-string-passed-on-the-command-index-mjs-cf84cfd4", "language": "javascript", "args": ["--help"], "stdout": "pleh--"}
+{"task_id": "vaca-export/a-node-js-javascript-cli-that-reverses-a-string-passed-on-the-command-main-js-474aafc3", "language": "javascript", "args": [], "stdout": "Usage: app [string]"}
+{"task_id": "vaca-export/a-simple-password-generator-cli-tool-in-typescript-with-generate-and-s-index-ts-5485bd67", "language": "typescript", "args": [], "stdout": "Usage: node index.js [generate|strength-check] [length] Commands: generate strength-check"}
+{"task_id": "vaca-export/a-small-todo-list-cli-app-with-add-list-complete-commands-main-ts-004bd06a", "language": "typescript", "args": [], "stdout": "[]"}
+{"task_id": "vaca-export/a-small-todo-list-cli-app-with-add-list-and-complete-commands-index-ts-a8e91347", "language": "typescript", "args": [], "stdout": "Unknown command. Use add, list, or complete."}
+{"task_id": "vaca-export/a-small-todo-list-cli-app-with-add-list-and-complete-commands-main-ts-7129d7bc", "language": "typescript", "args": [], "stdout": "Usage: add <description> Commands: add list complete"}
+{"task_id": "vaca-export/a-small-todo-list-cli-app-with-add-list-and-complete-commands-main-ts-a09ce450", "language": "typescript", "args": [], "stdout": "Usage: node main add <description> Commands: add list"}
+{"task_id": "vaca-export/a-small-todo-list-cli-app-with-add-list-and-complete-commands-todo-list-ts-bec6429c", "language": "typescript", "args": [], "stdout": "Usage: tsx todo-list.ts add Commands: add list complete"}
+{"task_id": "vaca-export/a-typescript-cli-that-prints-the-first-12-fibonacci-numbers-index-ts-05f1ddc7", "language": "typescript", "args": [], "stdout": "First 12 Fibonacci numbers: 0, 1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89"}
+{"task_id": "vaca-export/a-typescript-cli-that-prints-the-first-12-fibonacci-numbers-cli-ts-f09a756e", "language": "typescript", "args": [], "stdout": "0 1 1 2 3 5 8 13 21 34 55 89"}
+{"task_id": "vaca-export/a-typescript-cli-that-prints-the-first-12-fibonacci-numbers-fibonacci-ts-f54ad33f", "language": "typescript", "args": [], "stdout": "0 1 1 2 3 5 8 13 21 34 55 89"}
+{"task_id": "vaca-export/a-typescript-cli-that-prints-the-first-12-fibonacci-numbers-fibonacci-cli-ts-8e5d481b", "language": "typescript", "args": [], "stdout": "0 1 1 2 3 5 8 13 21 34 55 89"}
+{"task_id": "vaca-export/a-typescript-cli-that-prints-the-first-12-fibonacci-numbers-fibonacci-cli-ts-0b7518f4", "language": "typescript", "args": [], "stdout": "0 1 1 2 3 5 8 13 21 34 55 89"}
+{"task_id": "vaca-export/a-typescript-cli-that-reverses-a-string-passed-on-the-command-line-index-ts-fa9ac57c", "language": "typescript", "args": ["--help"], "stdout": "pleh--"}
+{"task_id": "vaca-export/a-typescript-cli-that-reverses-a-string-passed-on-the-command-line-index-ts-09c4cd37", "language": "typescript", "args": ["--help"], "stdout": "pleh--"}
+{"task_id": "vaca-export/build-a-javascript-cli-duplicate-file-finder-with-two-files-main-js-main-js-7ff3d505", "language": "javascript", "args": [], "stdout": "Usage: node main.js <directory>"}
+{"task_id": "cli-set/javascript-cli-set-invoice-totals-by-tax-band-600c50fd", "language": "javascript", "args": [], "stdout": "Invoice notebook: $14.97 (band 5%, tax $0.75) pen: $15.48 (band 5%, tax $0.77) desk lamp: $45.99 (band 10%, tax $4.60) usb cable: $35.96 (band 20%, tax $7.19) subtotal $112.40, tax $13.31"}
+{"task_id": "cli-set/javascript-cli-set-word-frequency-report-be40f5c5", "language": "javascript", "args": [], "stdout": "Most common words the 4 dog 2 fox 2 and 1 brown 1"}
+{"task_id": "cli-set/javascript-cli-set-merged-busy-blocks-bb8574d3", "language": "javascript", "args": [], "stdout": "Busy blocks 09:00-11:00 (120 min) 13:00-15:15 (135 min) 16:00-16:20 (20 min) busy 275 minutes"}

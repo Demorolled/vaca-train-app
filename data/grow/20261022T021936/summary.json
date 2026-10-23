@@ -1,0 +1,20 @@
+{
+  "seeds": 1,
+  "candidates": 3,
+  "accepted": 0,
+  "rejected": {
+    "invalid": 1,
+    "identical": 0,
+    "behavior_mismatch": 0,
+    "tie": 0,
+    "lost": 2,
+    "no_improvement": 0,
+    "duplicate": 0,
+    "judge_error": 0,
+    "coder_failed": 0
+  },
+  "accepted_tasks": [],
+  "avg_bytes": 0,
+  "avg_reference_bytes": 0,
+  "finished_at": "2026-10-22T02:19:51+00:00"
+}

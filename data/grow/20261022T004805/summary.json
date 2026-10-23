@@ -1,0 +1,42 @@
+{
+  "seeds": 3,
+  "candidates": 9,
+  "accepted": 2,
+  "rejected": {
+    "invalid": 1,
+    "identical": 0,
+    "behavior_mismatch": 3,
+    "tie": 0,
+    "lost": 3,
+    "duplicate": 0,
+    "judge_error": 0,
+    "coder_failed": 0
+  },
+  "accepted_tasks": [
+    {
+      "id": "grown/rosetta-99-bottles-of-beer-rust-4e461ab7-idiomatic-4782612e",
+      "seed": "rosetta/rosetta-99-bottles-of-beer-rust-4e461ab7",
+      "language": "rust",
+      "style": "idiomatic",
+      "bytes": 546,
+      "reference_bytes": 593,
+      "runtime_ms": 84,
+      "reference_runtime_ms": 487,
+      "reason": "Candidate B is smaller, faster, and more versatile while maintaining correctness and matching the reference output exactly."
+    },
+    {
+      "id": "grown/rosetta-99-bottles-of-beer-rust-4e461ab7-fast-56f8bc2c",
+      "seed": "rosetta/rosetta-99-bottles-of-beer-rust-4e461ab7",
+      "language": "rust",
+      "style": "fast",
+      "bytes": 609,
+      "reference_bytes": 593,
+      "runtime_ms": 87,
+      "reference_runtime_ms": 487,
+      "reason": "Candidate B is faster and more concise while maintaining correctness, but Candidate A is slightly smaller and more versatile due to better formatting and structure."
+    }
+  ],
+  "avg_bytes": 578,
+  "avg_reference_bytes": 593,
+  "finished_at": "2026-10-22T00:50:15+00:00"
+}

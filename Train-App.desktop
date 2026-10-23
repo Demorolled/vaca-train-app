@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Train App
+GenericName=Code harness + LoRA trainer
+Comment=Run code, fix it with the local LLM, learn only verified fixes
+Exec=/home/homellmlab/Desktop/vaca-train-app/run.sh --open
+Path=/home/homellmlab/Desktop/vaca-train-app
+Icon=applications-science
+Terminal=false
+Categories=Development;Science;ArtificialIntelligence;
+Keywords=train;harness;lora;qlora;vaca;llm;
+StartupNotify=false

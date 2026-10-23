@@ -1,0 +1,17 @@
+[Unit]
+Description=VACA overnight loop (function-level probe: generate, verify, keep)
+After=network-online.target ollama.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Change this line (and the next) if the clone lives elsewhere.
+WorkingDirectory=%h/vaca-train-app
+ExecStart=/usr/bin/python3 -m trainapp.overnight --hours 8 --rounds 2 --temperature 0.8
+Restart=on-failure
+RestartSec=60
+# A crash restarts the round it was in; the rows already written are kept.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target
