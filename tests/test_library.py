@@ -5,7 +5,7 @@ import os
 import tempfile
 import unittest
 
-from trainapp import library
+from trainapp import focus, library
 
 HAS_VACA = (library.vaca_root() / "backend" / "src" / "knowledge" / "rosettaCorpus.json").exists()
 
@@ -58,10 +58,17 @@ class LibraryTests(unittest.TestCase):
         tasks = library.load_tasks()
         self.assertEqual(index["total"], len(tasks))
         self.assertEqual(len({t["id"] for t in tasks}), len(tasks))
-        self.assertGreaterEqual(index["total"], 1200)
+        # The sheet is scoped to the five lanes, so the total is smaller than a
+        # corpus that keeps every language — but nothing may be lost from it.
+        self.assertGreaterEqual(index["total"], 1000)
+        self.assertGreater(index["all_languages"], index["total"])
+        self.assertEqual(len(library.load_tasks(all_languages=True)),
+                         index["all_languages"])
+        self.assertTrue(set(index["by_language"]) <= set(focus.LANGUAGES),
+                        index["by_language"])
         self.assertIn("typescript", index["by_language"])
         self.assertIn("rosetta", index["by_origin"])
-        self.assertGreater(index["runnable"], 300)
+        self.assertGreater(index["runnable"], 100)
 
     def test_stats_without_validation_reports_unvalidated(self) -> None:
         library.build()

@@ -19,7 +19,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from . import config
+from . import config, focus
 
 DEFAULT_VACA_ROOT = Path.home() / "Desktop" / "visual-ai-architect"
 TASK_FILE = "tasks.jsonl"
@@ -320,11 +320,15 @@ def build() -> dict:
         for task in unique:
             handle.write(json.dumps(task, ensure_ascii=False) + "\n")
 
-    index = {"total": len(unique), "by_language": {}, "by_origin": {},
-             "runnable": sum(1 for t in unique if t["runnable"]),
-             "multi_file": sum(1 for t in unique if is_multi_file(t)),
-             "vaca_root": str(vaca_root())}
-    for task in unique:
+    # The sheet keeps every language it was built with; the index counts the
+    # lanes the project works in, so its total matches what `load_tasks` returns.
+    kept = focus.keep(unique)
+    index = {"total": len(kept), "all_languages": len(unique),
+             "by_language": {}, "by_origin": {},
+             "runnable": sum(1 for t in kept if t["runnable"]),
+             "multi_file": sum(1 for t in kept if is_multi_file(t)),
+             "vaca_root": str(vaca_root()), "focus": focus.lanes()}
+    for task in kept:
         index["by_language"][task["language"]] = index["by_language"].get(task["language"], 0) + 1
         index["by_origin"][task["origin"]] = index["by_origin"].get(task["origin"], 0) + 1
     (library_dir() / INDEX_FILE).write_text(json.dumps(index, indent=2) + "\n", encoding="utf-8")
@@ -353,7 +357,7 @@ def append_grown(task: dict) -> tuple[bool, str]:
     if not code.strip():
         return False, "empty code"
     existing = {_code_hash(t.get("language", ""), t.get("code", ""))
-                for t in load_tasks()}
+                for t in load_tasks(all_languages=True)}
     key = _code_hash(language, code)
     if key in existing:
         return False, "code already in the library"
@@ -362,8 +366,15 @@ def append_grown(task: dict) -> tuple[bool, str]:
     return True, "added"
 
 
-def load_tasks() -> list[dict]:
-    """Base sources + grown rows, deduped by (language, code)."""
+def load_tasks(all_languages: bool = False) -> list[dict]:
+    """Base sources + grown rows, deduped by (language, code).
+
+    The sheet is scoped to `focus.LANES` — the five languages this project
+    trains and measures. Every consumer reads the library through here, so one
+    filter keeps the SFT rows, the probe pool, the gate and the growth loop on
+    the same lanes. `all_languages=True` returns the whole corpus; nothing was
+    removed from the files on disk.
+    """
     rows: list[dict] = []
     path = tasks_path()
     if path.exists():
@@ -385,7 +396,7 @@ def load_tasks() -> list[dict]:
             continue
         seen.add(key)
         unique.append(row)
-    return unique
+    return unique if all_languages else focus.keep(unique)
 
 
 def load_validation() -> dict[str, dict]:

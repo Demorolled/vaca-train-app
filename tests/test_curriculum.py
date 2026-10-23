@@ -31,7 +31,7 @@ class CurriculumTests(unittest.TestCase):
         library.mkdir(parents=True, exist_ok=True)
         rows = [
             task("base/python", "base-build"),
-            task("base/rust", "base-build", "rust"),
+            task("base/go", "base-build", "go"),
             task("rosetta/one", "rosetta"),
             task("vaca-export/app", "vaca-export", "python",
                  files=[{"path": "main.py", "content": "print(1)"}]),
@@ -50,7 +50,7 @@ class CurriculumTests(unittest.TestCase):
 
     def test_stages_select_their_own_origin_and_kind(self) -> None:
         basic = curriculum.stage_tasks("basic")
-        self.assertEqual({t["id"] for t in basic}, {"base/python", "base/rust"})
+        self.assertEqual({t["id"] for t in basic}, {"base/python", "base/go"})
         medium = curriculum.stage_tasks("medium")
         self.assertEqual({t["id"] for t in medium}, {"rosetta/one"})
         scaffold = curriculum.stage_tasks("scaffold")

@@ -72,10 +72,10 @@ class ScoreboardTests(unittest.TestCase):
         sheet = Path(self.tmp.name) / "library" / library.BASE_FILE
         sheet.parent.mkdir(parents=True, exist_ok=True)
         sheet.write_text(json.dumps({
-            "id": "base-build/sum-1", "language": "rust", "origin": "base-build",
-            "code": "fn main() { println!(1); }", "runnable": True,
+            "id": "base-build/sum-1", "language": "go", "origin": "base-build",
+            "code": "package main\nfunc main() { println(1) }", "runnable": True,
         }) + "\n", encoding="utf-8")
-        self.assertIn("rust", scoreboard.as_text())
+        self.assertIn("go", scoreboard.as_text())
 
 
 if __name__ == "__main__":

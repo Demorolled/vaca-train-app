@@ -64,6 +64,38 @@ transformers, peft and datasets — and it runs on the GPU box, not here.
 step, except TypeScript, which runs through Node's type stripping and has no
 check gate yet (stated in the toolchain panel, not hidden).
 
+### The five lanes (`focus`)
+
+The executor still builds and runs all thirteen languages, but the corpus the
+model is trained and measured on is scoped to five lanes, declared once in
+`trainapp/focus.py`:
+
+| lane | identifiers | rows | judgeable sets |
+|---|---|---|---|
+| JavaScript/TypeScript | `javascript`, `typescript` | 1513 | 78 |
+| Python | `python` | 278 | 31 |
+| Go | `go` | 297 | 21 |
+| Java | `java` | 249 | 8 |
+| C | `c` | 240 | 4 |
+
+`library.load_tasks()` applies the filter, so every consumer — SFT rows, plan
+and scaffold rows, the probe pool, the gate, the growth loop, the scoreboard —
+sees one scope. The sheet on disk keeps every row it was built with:
+`load_tasks(all_languages=True)` still returns all 4340, so the cut is an edit to
+`LANES` and a rebuild, not a lost corpus.
+
+Three things to know before changing it:
+
+- **It costs families, not rows.** 13 of the 29 held-out families had their only
+  siblings in a dropped language, so the measurable pool is 16 families / 69
+  sets until those programs get Java and C implementations. A family needs two
+  in-focus sets to be scored at all.
+- **PHP is out.** Its 257 rows stay in the sheet; its lane, and the
+  WordPress/web-long-tail coverage that came with it, do not.
+- **TypeScript and JavaScript share one lane.** They are the same job on the same
+  platform, so a family's siblings may be written in either and still count as
+  separate demonstrations.
+
 Two languages need more than an argv list, and the schema now carries it:
 
 - **C#** — `dotnet build` refuses a directory with no project. `run_node`
