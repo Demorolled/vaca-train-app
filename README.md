@@ -1,5 +1,11 @@
 # Train App
 
+> **Build notice:** VACA is in active reconstruction after an outside source
+> poisoned the training loop. The model is retraining from a clean base, and the
+> next build adds reverse-anything reconstruction, dual LLM connections with
+> per-task routing, and drag-and-drop node trees.
+> [Read the full notice →](NOTICE.md)
+
 A small, standalone implementation of the 80/20 architecture: a
 **language-agnostic harness** that runs code, hands the real error to a local
 LLM, proves the fix by running it again, and turns only **verified** fixes into
