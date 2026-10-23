@@ -29,6 +29,8 @@ MODULES = {
     "php": "php",
     "ruby": "ruby",
     "javascript": "javascript",
+    "java": "java",
+    "c": "c",
 }
 ORIGIN = "cli-set"
 SHEET = "cli_sets.jsonl"

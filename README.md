@@ -86,10 +86,12 @@ sees one scope. The sheet on disk keeps every row it was built with:
 
 Three things to know before changing it:
 
-- **It costs families, not rows.** 13 of the 29 held-out families had their only
-  siblings in a dropped language, so the measurable pool is 16 families / 69
-  sets until those programs get Java and C implementations. A family needs two
-  in-focus sets to be scored at all.
+- **Families need siblings in the lanes.** A family needs two in-focus sets
+  before its score means anything. The cut initially dropped 13 families whose
+  only siblings were in a dropped language, so the five multi-language programs
+  got Java and C implementations (`clisets/java.py`, `clisets/c.py`): the pool is
+  now 28 families / 112 scored sets over 167 verified sets, and each of the five
+  programs has all five lanes.
 - **PHP is out.** Its 257 rows stay in the sheet; its lane, and the
   WordPress/web-long-tail coverage that came with it, do not.
 - **TypeScript and JavaScript share one lane.** They are the same job on the same

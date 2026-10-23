@@ -1,31 +1,32 @@
 {
-  "total": 4340,
+  "total": 2602,
+  "all_languages": 4375,
   "by_language": {
     "typescript": 1263,
-    "go": 297,
-    "rust": 254,
-    "c": 240,
-    "cpp": 245,
-    "java": 249,
-    "csharp": 257,
-    "swift": 253,
-    "kotlin": 244,
-    "php": 257,
-    "ruby": 253,
-    "python": 278,
-    "javascript": 250
+    "go": 302,
+    "c": 245,
+    "java": 254,
+    "python": 283,
+    "javascript": 255
   },
   "by_origin": {
     "code-bible": 904,
-    "rosetta": 313,
-    "curated": 6,
-    "grown": 4,
-    "vaca-export": 448,
-    "base-build": 1300,
-    "medium-build": 1300,
-    "cli-set": 65
+    "rosetta": 103,
+    "curated": 2,
+    "grown": 2,
+    "vaca-export": 327,
+    "base-build": 600,
+    "medium-build": 600,
+    "cli-set": 64
   },
-  "runnable": 3436,
-  "multi_file": 513,
-  "vaca_root": "/home/homellmlab/Desktop/visual-ai-architect"
+  "runnable": 1698,
+  "multi_file": 391,
+  "vaca_root": "/home/homellmlab/Desktop/visual-ai-architect",
+  "focus": [
+    "JavaScript/TypeScript",
+    "Python",
+    "Java",
+    "Go",
+    "C"
+  ]
 }
