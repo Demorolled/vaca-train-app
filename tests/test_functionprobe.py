@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import unittest.mock as mock
 from pathlib import Path
 
 from trainapp import functionprobe
@@ -261,6 +262,104 @@ class CandidateTests(unittest.TestCase):
         for language in ("csharp", "java", "kotlin", "swift", "php", "ruby",
                          "typescript", "javascript", "go", "rust", "python"):
             self.assertIn(language, functionprobe.LANGUAGES, language)
+
+    def test_the_prompt_shows_the_imports_the_file_already_has(self) -> None:
+        """Go's largest failure class was `undefined: sort` in a file imported without it."""
+        go_set = {
+            "id": "probe/go-set", "language": "go", "target": "schedule.go",
+            "files": [{"path": "schedule.go",
+                       "content": ("package main\n\nimport (\n\t\"fmt\"\n\t\"sort\"\n)\n\n"
+                                   "func Merge(slots []Slot) []Slot {\n"
+                                   "\tif len(slots) == 0 {\n"
+                                   "\t\treturn slots\n"
+                                   "\t}\n"
+                                   "\tsort.Slice(slots, func(i, j int) bool {\n"
+                                   "\t\treturn slots[i].Start < slots[j].Start\n"
+                                   "\t})\n"
+                                   "\treturn slots\n"
+                                   "}\n")}],
+        }
+        imports = functionprobe.import_lines("go", go_set["files"][0]["content"])
+        self.assertIn('"sort"', imports)
+        self.assertIn('"fmt"', imports)
+        fn = functionprobe.probe_functions(go_set)[0]
+        _instruction, given = functionprobe.prompt_parts(go_set, fn)
+        self.assertIn("### Imports already in this file", given)
+        self.assertIn('"sort"', given)
+
+    def test_a_set_without_imports_gets_no_import_section(self) -> None:
+        bare = {"id": "probe/bare", "language": "python", "target": "main.py",
+                "files": [{"path": "main.py",
+                           "content": ("def value():\n    total = 1\n    return total\n\n\n"
+                                       "def main():\n    print(value())\n")}]}
+        fn = functionprobe.probe_functions(bare, min_lines=2)[0]
+        self.assertEqual(functionprobe.import_lines("python",
+                                                    bare["files"][0]["content"]), [])
+        _instruction, given = functionprobe.prompt_parts(bare, fn)
+        self.assertNotIn("Imports already in this file", given)
+
+    def test_python_and_ruby_imports_are_found(self) -> None:
+        py = "import json\nfrom pathlib import Path\n\ndef go():\n    return 1\n"
+        self.assertEqual(functionprobe.import_lines("python", py),
+                         ["import json", "from pathlib import Path"])
+        rb = "require 'json'\nrequire_relative 'util'\n\ndef go\n  1\nend\n"
+        self.assertEqual(functionprobe.import_lines("ruby", rb),
+                         ["require 'json'", "require_relative 'util'"])
+
+    def test_php_asks_for_functions_not_for_loops(self) -> None:
+        """`foreach ($x as $y) {` matched GENERIC, so the probe asked for a loop."""
+        php = ("<?php\n"
+               "function validate($codes) {\n"
+               "    $valid = 0;\n"
+               "    foreach ($codes as $code) {\n"
+               "        $valid += check($code);\n"
+               "    }\n"
+               "    return $valid;\n"
+               "}\n")
+        found = functionprobe.find_functions("php", php)
+        self.assertEqual([f["signature"] for f in found], ["function validate($codes) {"])
+        self.assertFalse(any(f["signature"].startswith("foreach")
+                             for f in functionprobe.find_functions("php", php)))
+
+    def test_a_php_method_keeps_its_modifiers_in_the_ask(self) -> None:
+        php = ("<?php\nclass Store {\n"
+               "    public static function load($path) {\n"
+               "        return [];\n"
+               "    }\n}\n")
+        found = functionprobe.find_functions("php", php)
+        self.assertEqual([f["signature"] for f in found],
+                         ["public static function load($path) {"])
+
+    def test_a_failure_with_no_streams_still_records_why(self) -> None:
+        """483 night rows said `compile: false` and gave no reason at all."""
+        from trainapp import execution
+
+        silent = execution.RunResult(ok=False, exit_code=1)
+        self.assertEqual(functionprobe.diagnostic(silent),
+                         "exited 1 with no output")
+        noisy = execution.RunResult(ok=False, exit_code=2, stderr="error TS2304: cannot find name 'x'")
+        self.assertIn("cannot find name", functionprobe.diagnostic(noisy))
+        printed = execution.RunResult(ok=False, exit_code=1, stdout="panic: index out of range")
+        self.assertIn("panic", functionprobe.diagnostic(printed))
+
+    def test_a_frozen_pool_is_resolved_outside_the_lane_cut(self) -> None:
+        """Resolving through `candidates()` dropped 23 of the champion's 76 sets."""
+        seen: dict = {}
+        php_set = {"id": "vaca-export/php-set-1", "language": "php",
+                   "target": "main.php",
+                   "files": [{"path": "main.php", "content": "<?php echo 1;"}]}
+
+        def load_tasks(all_languages: bool = False):
+            seen["all_languages"] = all_languages
+            return [php_set] if all_languages else []
+
+        with mock.patch.object(functionprobe.library, "load_tasks",
+                               side_effect=load_tasks), \
+                mock.patch.object(functionprobe.library, "load_validation",
+                                  return_value={php_set["id"]: {"status": "verified"}}):
+            found = functionprobe.pool_candidates()
+        self.assertTrue(seen["all_languages"])
+        self.assertEqual([t["id"] for t in found], [php_set["id"]])
 
 
 if __name__ == "__main__":

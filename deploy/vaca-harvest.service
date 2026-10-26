@@ -1,0 +1,12 @@
+[Unit]
+Description=VACA harvest (every finished build into the library)
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Change this line if the clone lives elsewhere.
+WorkingDirectory=%h/vaca-train-app
+ExecStart=/usr/bin/python3 -m trainapp.harvest --monthly
+# Reads the copies on disk and appends to the library; a month with no builds
+# is a valid no-op, so a non-zero exit only ever means a real write failure.
+Nice=10

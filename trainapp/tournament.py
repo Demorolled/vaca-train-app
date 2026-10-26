@@ -20,7 +20,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import capture, config, execution, judge, library, repair
+from . import capture, config, execution, judge, library, preferences, repair
 
 STYLES: dict[str, str] = {
     "terse": "as few lines and bytes as possible while staying correct",
@@ -99,6 +99,60 @@ def _child_env() -> dict:
     return {**dict(), "PYTHONIOENCODING": "utf-8"}
 
 
+def _target_of(task: dict) -> str:
+    """The one file a set is asked to write, if the set names a real one."""
+    target = task.get("target") or ""
+    paths = {entry.get("path") for entry in task.get("files") or []}
+    return target if target in paths else ""
+
+
+def _target_code(task: dict, target: str) -> str:
+    for entry in task.get("files") or []:
+        if entry.get("path") == target:
+            return entry.get("content") or ""
+    return ""
+
+
+def _scaffold_prompt(task: dict, style: str = "") -> str:
+    """The file-in-context ask, in this tournament's style slot.
+
+    A file set has no single program to restyle, so the unit written here is
+    the target file with its siblings in view — the same ask `battery` scores
+    and `scaffoldsft` trains, which is what makes a pair from it comparable
+    with a library row. The style rides at the end of the Input half: the
+    reply slot after `### Response` stays a clean file.
+    """
+    from . import battery  # battery imports this module; import at call time
+
+    body = battery.scaffold_input(task)
+    if style:
+        body += (f"\n\nSTYLE: write this file in the **{style}** style: "
+                 f"{STYLES.get(style, style)}.")
+    return preferences.PROMPT_TEMPLATE.format(
+        language=task.get("language", ""),
+        title=(task.get("title") or "").strip(),
+        task=body,
+    )
+
+
+def _run_scaffold(task: dict, code: str, timeout_s: float,
+                  repeats: int = 1) -> dict:
+    """Build and run the whole set with `code` in the target file."""
+    from . import battery
+
+    first = battery._run_set(task, code, timeout_s)
+    runs = [first.get("runtime_ms", 0)]
+    if first.get("valid") and repeats > 1:
+        for _ in range(repeats - 1):
+            again = battery._run_set(task, code, timeout_s)
+            if again.get("valid"):
+                runs.append(again.get("runtime_ms", 0))
+    return {"valid": bool(first.get("valid")),
+            "stdout": first.get("stdout", ""),
+            "runtime_ms": int(statistics.median(runs)) if first.get("valid") else 0,
+            "error": first.get("error", "")}
+
+
 def _run_code(task: dict, code: str, timeout_s: float, repeats: int = 1) -> dict:
     """Compile + run one implementation, returning validity and median runtime."""
     language = task.get("language", "")
@@ -149,15 +203,23 @@ def _variant(task: dict, style: str, code: str, result: dict, reference_stdout: 
 
 
 def choose_tasks(tasks: list[dict], limit: int, languages: set[str] | None = None,
-                 exclude: set[str] | None = None) -> list[dict]:
-    """Confirmed single-file programs, optionally skipping ids a run covered.
+                 exclude: set[str] | None = None, sets: bool = False,
+                 origin: str = "") -> list[dict]:
+    """Confirmed seeds a run may restyle, optionally skipping ids it covered.
 
-    A tournament restyles ONE program; a file set has no single program to
-    restyle, so scaffold tasks are a battery task and never a seed here.
+    Single-file programs are the default seed. `sets=True` takes confirmed
+    file sets instead, which are restyled one target file at a time; a set
+    without a real target has nothing to ask for and is skipped. `origin`
+    narrows either kind to one source, so a round can be aimed at the builds
+    a distiller just produced instead of the whole sheet.
     """
     confirmed = [t for t in tasks if t.get("runnable")
                  and t.get("language") in execution.TOOLCHAINS
-                 and not library.is_multi_file(t)]
+                 and bool(library.is_multi_file(t)) == sets]
+    if sets:
+        confirmed = [t for t in confirmed if _target_of(t)]
+    if origin:
+        confirmed = [t for t in confirmed if (t.get("origin") or "") == origin]
     if languages:
         confirmed = [t for t in confirmed if t["language"] in languages]
     if exclude:
@@ -167,12 +229,26 @@ def choose_tasks(tasks: list[dict], limit: int, languages: set[str] | None = Non
 
 
 def run_task(task: dict, *, styles: list[str], run_timeout_s: float,
-             repeats: int, coder=None, judge_fn=None) -> dict:
-    """One task: 7 style variants -> validate -> judge -> winner + pairs."""
+             repeats: int, coder=None, judge_fn=None,
+             prompt_fn=None, runner=None) -> dict:
+    """One task: 7 style variants -> validate -> judge -> winner + pairs.
+
+    `prompt_fn` and `runner` are the two seams a file set needs: the ask is
+    the target file with its siblings in view, and the grade is the whole set
+    building and running, not one file on its own. Both default to the
+    single-file behaviour, so a program task is unchanged by them.
+    """
+    if library.is_multi_file(task) and prompt_fn is None:
+        return run_set_task(task, styles=styles, run_timeout_s=run_timeout_s,
+                            repeats=repeats, coder=coder, judge_fn=judge_fn)
     coder = coder or repair.OllamaClient()
     judge_fn = judge_fn or judge.compare
+    prompt_fn = prompt_fn or _style_prompt
 
-    reference = _run_code(task, task["code"], run_timeout_s, repeats=1)
+    run = runner or (lambda t, code, count:
+                     _run_code(t, code, run_timeout_s, repeats=count))
+
+    reference = run(task, task["code"], 1)
     reference_stdout = _normalize_stdout(reference.get("stdout", ""))
     baseline = {
         "style": "reference", "code": task["code"],
@@ -186,7 +262,7 @@ def run_task(task: dict, *, styles: list[str], run_timeout_s: float,
     variants: list[dict] = []
     for style in styles:
         try:
-            raw = coder.complete(_style_prompt(task, style))
+            raw = coder.complete(prompt_fn(task, style))
         except Exception as err:  # a coder failure skips one style, never the task
             variants.append({"task_id": task["id"], "language": task["language"],
                              "style": style, "code": "", "bytes": 0, "lines": 0,
@@ -194,7 +270,7 @@ def run_task(task: dict, *, styles: list[str], run_timeout_s: float,
                              "error": f"coder failed: {err}"[:300]})
             continue
         code = repair.extract_code(raw)
-        result = _run_code(task, code, run_timeout_s, repeats=repeats)
+        result = run(task, code, repeats)
         variants.append(_variant(task, style, code, result, reference_stdout))
 
     verdicts: list[dict] = []
@@ -269,6 +345,50 @@ def run_task(task: dict, *, styles: list[str], run_timeout_s: float,
     }
 
 
+def run_set_task(task: dict, *, styles: list[str], run_timeout_s: float,
+                 repeats: int, coder=None, judge_fn=None) -> dict:
+    """A confirmed file set: the target file restyled, graded by the set.
+
+    The siblings are in the prompt because that is the contract VACA's own
+    builder works under — one file, written to fit what already exists. Every
+    variant is judged only after the whole set has built and run, so a file
+    that reads well but breaks the project loses on the toolchain.
+    """
+    target = _target_of(task)
+    if not target:
+        raise ValueError(f"{task.get('id', '?')} has no target file to restyle")
+    reference_code = _target_code(task, target)
+    outcome = run_task(
+        {**task, "code": reference_code},
+        styles=styles, run_timeout_s=run_timeout_s, repeats=repeats,
+        coder=coder, judge_fn=judge_fn,
+        prompt_fn=_scaffold_prompt,
+        runner=lambda t, code, count: _run_scaffold(t, code, run_timeout_s, count))
+    for pair in outcome["pairs"]:
+        pair["kind"] = "scaffold"
+        pair["target"] = target
+        pair["prompt"] = _scaffold_prompt(task)
+    if outcome.get("winner"):
+        outcome["capture_row"] = _set_winner_row(task, outcome["winner"])
+    return outcome
+
+
+def _set_winner_row(task: dict, winner: dict) -> dict:
+    """The winning target file as a scaffold-shaped training row."""
+    from . import battery
+
+    return {
+        "instruction": battery.scaffold_instruction(task),
+        "input": battery.scaffold_input(task),
+        "output": winner["code"],
+        "source": "tournament:winner",
+        "meta": {"language": task["language"], "task_id": task["id"],
+                 "target": task.get("target", ""), "style": winner["style"],
+                 "bytes": winner["bytes"], "runtime_ms": winner["runtime_ms"],
+                 "scaffold": True},
+    }
+
+
 def _winner_row(task: dict, winner: dict) -> dict:
     return {
         "instruction": (
@@ -287,13 +407,15 @@ def _winner_row(task: dict, winner: dict) -> dict:
 
 def execute(max_tasks: int, styles: list[str], run_timeout_s: float = 20,
             repeats: int = 3, languages: set[str] | None = None,
-            coder=None, judge_fn=None, exclude: set[str] | None = None) -> dict:
+            coder=None, judge_fn=None, exclude: set[str] | None = None,
+            sets: bool = False, origin: str = "") -> dict:
     """Run a bounded tournament; writes a run directory plus a summary."""
     if not library.tasks_path().exists():
         library.build()
     confirmed_ids = {t["id"] for t in library.confirmed()}
     candidates = [t for t in library.load_tasks() if t["id"] in confirmed_ids]
-    chosen = choose_tasks(candidates, max_tasks, languages, exclude)
+    chosen = choose_tasks(candidates, max_tasks, languages, exclude,
+                          sets=sets, origin=origin)
     if not chosen:
         _publish(state="failed", error="no confirmed runnable tasks — run library validation first",
                  finished_at=_now())
@@ -322,7 +444,8 @@ def execute(max_tasks: int, styles: list[str], run_timeout_s: float = 20,
             for pair in result.get("pairs", []):
                 pairs_handle.write(json.dumps(pair, ensure_ascii=False) + "\n")
             if result.get("winner"):
-                capture.append_row(_winner_row(result["task"], result["winner"]))
+                capture.append_row(result.get("capture_row")
+                                   or _winner_row(result["task"], result["winner"]))
             pairs_handle.flush()
             results_handle.flush()
             _publish(done=index)
@@ -384,6 +507,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--exclude-covered", action="store_true",
                         help="skip seeds that already have preference pairs")
+    parser.add_argument("--sets", action="store_true",
+                        help="restyle confirmed file sets instead of single files")
+    parser.add_argument("--origin", default="",
+                        help="only seeds from one origin (e.g. distiller-build)")
     args = parser.parse_args(argv)
     styles = [s.strip() for s in args.styles.split(",") if s.strip()] or list(STYLES)
     languages = {x.strip().lower() for x in args.languages.split(",") if x.strip()} or None
@@ -392,7 +519,7 @@ def main(argv: list[str] | None = None) -> int:
         from . import preferences
         exclude = {p.get("task_id", "") for p in preferences.collect_pairs()}
     result = execute(args.tasks, styles, args.timeout, args.repeats, languages,
-                     exclude=exclude)
+                     exclude=exclude, sets=args.sets, origin=args.origin)
     print(json.dumps({k: result.get(k) for k in ("state", "done", "tasks", "summary", "error")},
                      indent=2))
     return 0 if result.get("state") == "done" else 1

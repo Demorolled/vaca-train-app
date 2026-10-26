@@ -14,6 +14,12 @@ fence-free single files, scaffold bodies replaced rather than echoed, no invente
 Checks are deliberately literal. They are a contract gate, not a quality grade:
 they catch a round that breaks the format the app depends on, and leave "is the
 code any good" to the battery, which compiles and runs it.
+
+A probe is answered more than once, because one answer is a coin flip: three
+draws at the app's own sampling, graded by majority, and a split probe is handed
+a second batch so the pooled majority decides. `samples > 1` on a greedy coder
+buys nothing — the same decode comes back every time — which is why `evaluate`
+takes a temperature and says so in the log when it was given none.
 """
 from __future__ import annotations
 
@@ -194,15 +200,38 @@ def _failing_reason(attempts: list[dict], passed: int, runs: int) -> str:
     return f"{why} ({passed}/{runs} runs passed)" if runs > 1 else why
 
 
+def _draw(coder, pid: str, prompt: str, count: int, log) -> list[dict]:
+    """`count` independent answers to one probe, each graded on its own."""
+    attempts: list[dict] = []
+    for _ in range(count):
+        try:
+            text = coder.complete(prompt)
+        except Exception as err:  # a broken coder is a failed probe, not a crash
+            attempts.append({"ok": False, "response": "",
+                             "reason": f"coder failed: {type(err).__name__}"})
+            log(f"[probe {pid}] coder failed: {err}")
+            continue
+        verdict = check(pid, text)
+        attempts.append({"ok": verdict["ok"], "reason": verdict["reason"],
+                         "response": text})
+    return attempts
+
+
 def evaluate(model: str, adapter: str = "", max_new_tokens: int = MAX_NEW_TOKENS,
-             samples: int = 1, log=print) -> dict:
+             samples: int = 1, confirm: int = 0, temperature: float = 0.0,
+             top_p: float = 1.0, log=print) -> dict:
     """Run the battery against one adapter and return its pass set.
 
-    One sample grades a coin flip as a fact. The first unattended cycle refused
-    a candidate whose only regressions were two prose probes while every format
-    probe it had failed still failed, which is a lane reading taken from a single
-    draw at temperature. `samples > 1` grades each probe by a strict majority of
-    its runs, so the guard rests on the lane rather than on one answer.
+    One sample grades a coin flip as a fact. `samples > 1` grades each probe by
+    a strict majority of its runs — but only if the runs are different draws: a
+    greedy coder (`temperature=0`, the default) returns the same decode every
+    time, so `samples` alone is a formality and this says so in the log.
+
+    `confirm` is the stability half of the guard. A probe that splits its first
+    batch (some runs pass, some fail) is not decided by that batch: it is asked
+    `confirm` more times, and the pooled majority decides. A probe that fails
+    every draw or passes every draw is left alone — a lane lost 3/3 or held 3/3
+    is evidence, and paying for a recheck of it would only double the gate.
 
     torch/transformers are imported by `LocalCoder` lazily, so importing this
     module stays free on a machine without them.
@@ -210,31 +239,32 @@ def evaluate(model: str, adapter: str = "", max_new_tokens: int = MAX_NEW_TOKENS
     from .localcoder import LocalCoder
 
     runs = max(1, samples)
+    recheck = max(1, confirm)
     name = f"{model}+{Path(adapter).parent.name}" if adapter else model
-    coder = LocalCoder(model, adapter=adapter, max_new_tokens=max_new_tokens)
+    if runs > 1 and temperature <= 0:
+        log(f"[probe gate] {name}: greedy coder, {runs} runs repeat one decode")
+    coder = LocalCoder(model, adapter=adapter, max_new_tokens=max_new_tokens,
+                       temperature=temperature, top_p=top_p)
     rows: list[dict] = []
+    rechecked: list[str] = []
     try:
         for pid, lane, prompt in PROBES:
-            attempts: list[dict] = []
-            for _ in range(runs):
-                try:
-                    text = coder.complete(prompt)
-                except Exception as err:  # a broken coder is a failed probe, not a crash
-                    attempts.append({"ok": False, "response": "",
-                                     "reason": f"coder failed: {type(err).__name__}"})
-                    log(f"[probe {pid}] coder failed: {err}")
-                    continue
-                verdict = check(pid, text)
-                attempts.append({"ok": verdict["ok"], "reason": verdict["reason"],
-                                 "response": text})
+            attempts = _draw(coder, pid, prompt, runs, log)
             passed = sum(1 for attempt in attempts if attempt["ok"])
-            ok = passed * 2 > runs
+            if confirm and 0 < passed < runs:
+                rechecked.append(pid)
+                log(f"[probe {pid}] split {passed}/{runs}, asking {recheck} more")
+                attempts += _draw(coder, pid, prompt, recheck, log)
+                passed = sum(1 for attempt in attempts if attempt["ok"])
+            total = len(attempts)
+            ok = passed * 2 > total
             verdict = {"id": pid, "lane": lane, "prompt": prompt, "ok": ok,
-                       "scored": pid in SCORED, "passed_runs": passed, "runs": runs,
-                       "reason": "" if ok else _failing_reason(attempts, passed, runs),
+                       "scored": pid in SCORED, "passed_runs": passed, "runs": total,
+                       "rechecked": pid in rechecked,
+                       "reason": "" if ok else _failing_reason(attempts, passed, total),
                        "response": attempts[-1]["response"], "attempts": attempts}
             rows.append(verdict)
-            note = f" ({passed}/{runs})" if runs > 1 else ""
+            note = f" ({passed}/{total})" if total > 1 else ""
             log(f"[probe {pid}] {'pass' + note if ok else 'FAIL: ' + verdict['reason']}")
     finally:
         coder.close()
@@ -250,6 +280,7 @@ def evaluate(model: str, adapter: str = "", max_new_tokens: int = MAX_NEW_TOKENS
         "total": len(scored),
         "passed_ids": passed,
         "failures": failures,
+        "rechecked": rechecked,
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
     path = locate() / "probes.jsonl"

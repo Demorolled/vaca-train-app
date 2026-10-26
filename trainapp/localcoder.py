@@ -24,12 +24,19 @@ class LocalCoder:
     """Greedy, chat-templated generation from a local model plus optional adapter."""
 
     def __init__(self, model: str, adapter: str = "", max_new_tokens: int = 700,
-                 dtype: str = "bfloat16", device_map: str = "auto") -> None:
+                 dtype: str = "bfloat16", device_map: str = "auto",
+                 temperature: float = 0.0, top_p: float = 1.0) -> None:
         self.model = model
         self.adapter = adapter
         self.max_new_tokens = max_new_tokens
         self.dtype = dtype
         self.device_map = device_map
+        # Greedy by default: scoring a capability wants one reproducible answer.
+        # A gate that grades "does it still keep the contract" wants draws from
+        # the sampling the app actually serves at, so it passes 0.7/0.9 and a
+        # second call is a second sample rather than the same decode again.
+        self.temperature = temperature
+        self.top_p = top_p
         self._tok = None
         self._net = None
         self._lock = threading.Lock()
@@ -65,10 +72,12 @@ class LocalCoder:
         text = tok.apply_chat_template(messages, tokenize=False,
                                        add_generation_prompt=True)
         inputs = tok(text, return_tensors="pt").to(net.device)
+        sampling: dict = {"max_new_tokens": self.max_new_tokens, "do_sample": False}
+        if self.temperature > 0:
+            sampling.update(do_sample=True, temperature=self.temperature,
+                            top_p=self.top_p)
         with self._lock, torch.no_grad():
-            out = net.generate(**inputs, max_new_tokens=self.max_new_tokens,
-                               do_sample=False, temperature=None, top_p=None,
-                               pad_token_id=tok.pad_token_id)
+            out = net.generate(**inputs, **sampling, pad_token_id=tok.pad_token_id)
         new_tokens = out[0][inputs["input_ids"].shape[1]:]
         return tok.decode(new_tokens, skip_special_tokens=True)
 

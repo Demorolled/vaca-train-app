@@ -27,7 +27,9 @@ GROWN_FILE = "grown.jsonl"
 IMPORTED_FILE = "app_tasks.jsonl"
 BASE_FILE = "base_builds.jsonl"
 MEDIUM_FILE = "medium_builds.jsonl"
+DISTILLER_FILE = "distiller_builds.jsonl"
 CLI_FILE = "cli_sets.jsonl"
+BAND_FILE = "band_builds.jsonl"
 INDEX_FILE = "index.json"
 VALIDATION_FILE = "validation.jsonl"
 PUZZLE_FILE = "puzzle_scores.jsonl"
@@ -97,6 +99,11 @@ def _task(*, origin: str, language: str, title: str, code: str, runnable: bool,
     return task
 
 
+def task_row(**kwargs) -> dict:
+    """Public constructor for a library entry; the same shape `_task` builds."""
+    return _task(**kwargs)
+
+
 def is_multi_file(task: dict) -> bool:
     """True when the task is a file set (a scaffold), not a lone program."""
     return bool(task.get("files")) and bool(task.get("target"))
@@ -127,6 +134,16 @@ def ingest_medium() -> list[dict]:
     return _read_sheet(MEDIUM_FILE)
 
 
+def ingest_distiller() -> list[dict]:
+    """Whole apps other models built and the Distiller's toolchain ran.
+
+    Kept in their own sheet because `appcorpus.ingest` rewrites the exported
+    sheet from scratch, and these rows cost a model minutes of real work each
+    (see `distiller.py`).
+    """
+    return _read_sheet(DISTILLER_FILE)
+
+
 def _read_sheet(name: str) -> list[dict]:
     path = library_dir() / name
     if not path.exists():
@@ -140,6 +157,16 @@ def _read_sheet(name: str) -> list[dict]:
         if isinstance(row, dict) and row.get("code"):
             rows.append(row)
     return rows
+
+
+def ingest_band() -> list[dict]:
+    """Apps this project built itself, verified by their own toolchain run.
+
+    Written by `harvest.py` from the copies under `data/band` and `data/builds`.
+    Kept in its own sheet because a harvest appends to it month after month and
+    rebuilding the scraped sources must never disturb what the build earned.
+    """
+    return _read_sheet(BAND_FILE)
 
 
 def ingest_clisets() -> list[dict]:
@@ -309,7 +336,7 @@ def build() -> dict:
     # index has to count them or the UI reports a total that no loader agrees
     # with.
     for task in [*load_grown(), *ingest_imported(), *ingest_base(), *ingest_medium(),
-                 *ingest_clisets()]:
+                 *ingest_clisets(), *ingest_distiller(), *ingest_band()]:
         key = _code_hash(task["language"], task["code"])
         if key in seen:
             continue
@@ -388,6 +415,8 @@ def load_tasks(all_languages: bool = False) -> list[dict]:
     rows.extend(ingest_base())
     rows.extend(ingest_medium())
     rows.extend(ingest_clisets())
+    rows.extend(ingest_distiller())
+    rows.extend(ingest_band())
     seen: set[str] = set()
     unique: list[dict] = []
     for row in rows:

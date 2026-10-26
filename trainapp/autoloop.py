@@ -31,7 +31,7 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -46,7 +46,9 @@ LOG_FILE = "autoloop.log"
 
 # A candidate must move the primary metric by at least one task and may not
 # lose more than one boundary probe: behaviour bought with the format lane is
-# the failure this repository has already paid for once.
+# the failure this repository has already paid for once. A lost probe is a probe
+# lost on the pooled majority of its draws, so the tolerance is spent on a lane
+# that really moved, not on one answer that happened to land badly.
 MIN_FAMILY_GAIN = 1
 MAX_GATE_LOSS = 1
 BREADTH_GAIN = 2
@@ -54,15 +56,40 @@ BREADTH_GAIN = 2
 # language swap inside one family is enough to produce it.
 PAIRED_ALPHA = 0.2
 MIN_PAIRED_TASKS = 20
+# Every held-out set is scored twice. One greedy decode per set is a single bit
+# of evidence, and a verdict that turns on four of them (cycle 10: +5/-1, p=0.22)
+# cannot tell a real gain from a lucky token. The draws are taken at the app's
+# own sampling, so a set that passes once and fails once is recorded as such
+# instead of being reduced to whichever decode came first.
+EVAL_DRAWS = 2
+EVAL_TEMPERATURE = 0.7
+EVAL_TOP_P = 0.9
+# Bump when the scoring rule changes: rows from one draw are not comparable with
+# rows from two, so the champion is measured again under the new rule before it
+# judges anyone.
+EVAL_VERSION = 2
 # Probes a candidate must fix, not merely hold, for a contract repair to count
 # as a reason to keep it when the family metric cannot tell.
 CONTRACT_GAIN = 2
 # Bump when the held-out split changes: a frozen pool from the old rule would
 # keep scoring sets the new rule says cannot be measured.
 POOLS_VERSION = 3
-# Each probe is generated three times and graded by strict majority: a guard
-# that refuses a candidate on one unlucky sentence is a guard that rejects noise.
+# Each probe is generated three times and graded by strict majority, and a probe
+# whose runs disagree is asked three more times before it counts either way: a
+# guard that refuses a candidate on one unlucky sentence is a guard that rejects
+# noise. The draws are taken at the app's own sampling (Modelfile: 0.7/0.9) —
+# three greedy decodes are one answer printed three times, not three samples.
 GATE_SAMPLES = 3
+GATE_CONFIRM = 3
+GATE_TEMPERATURE = 0.7
+GATE_TOP_P = 0.9
+# Bump when the way the gate is measured changes. A champion's stored total was
+# measured by the old rule, so it is re-measured under the new one before it is
+# used as the bar for anybody else.
+GATE_VERSION = 2
+# Half of train_lora's default 2e-4. A cycle that ends with fences back and the
+# scaffold lane gone has spent too much update on too narrow a sheet.
+TRAIN_LR = 1e-4
 
 
 @dataclass
@@ -72,10 +99,22 @@ class Levers:
     samples: int = 3
     max_functions: int = 3
     per_family: int = 5
-    sft_steps: int = 120
-    orpo_steps: int = 12
+    # 60 steps at half the old learning rate: a round that memorises its own
+    # pairs while losing the fence lane is updating too hard, not learning too
+    # little. See `TRAIN_LR`.
+    sft_steps: int = 60
+    # 40, not 12: on the 168-task held-out pool a 12-step pass cost 19 compile
+    # tasks for 5 gained (p=0.007), while 40 steps cost 11 for 8 (p=0.65) and
+    # kept the same behaviour gain. See `data/battery/wide/report.json`.
+    orpo_steps: int = 40
+    # The contract rehearsal that follows ORPO (see `trainloop.rehearsal_sheet`).
+    # 0 turns it off, which is how the mixture A/B measures what it is worth.
+    rehearsal_steps: int = 15
     night_hours: float = 1.0
-    continue_from_best: bool = False
+    # Every candidate used to start from the base model, so no round could build
+    # on the champion and the curve could only repeat itself. Compounding is the
+    # default now; the gate still refuses a round that gives the contract back.
+    continue_from_best: bool = True
 
 
 # Ordered cheapest-first: each rung costs GPU time or wall-clock, so a plateau
@@ -84,16 +123,31 @@ class Levers:
 # No rung spends more on near-miss pairs. A pair teaches the family it was mined
 # from, and the primary metric holds whole families out: more pairs per family
 # is the one lever the leak-free experiment showed cannot move that number. The
-# training mix is fixed instead — one demonstration per program per language,
+# training mix is fixed instead — a few demonstrations per program per language,
 # see `librarysft.rows` — and the rungs buy measurement instead.
+#
+# Compounding (`continue_from_best`) was the last rung; it is the base now, so the
+# rungs left are the ones that buy a longer look, not a different starting point.
 LADDER = (
     ("samples", 4, "more samples per function: fills the hour the queue leaves"),
     ("night_hours", 1.6, "a longer night"),
     ("max_functions", 4, "every function in the target, not the largest three"),
-    ("sft_steps", 200, "a longer SFT pass"),
-    ("continue_from_best", True, "train on top of the champion instead of the base"),
+    ("sft_steps", 120, "a longer SFT pass"),
 )
 BASE = Levers()
+
+
+def _stored_levers(state: dict) -> Levers:
+    """The levers the run had climbed to, so a restart does not drop a rung.
+
+    A restart resumes the cycle number; resuming it on the base levers instead
+    would silently undo an escalation and leave `tried` claiming a rung that
+    never ran.
+    """
+    known = {field.name for field in fields(Levers)}
+    kept = {key: value for key, value in (state.get("levers") or {}).items()
+            if key in known}
+    return Levers(**kept) if kept else Levers()
 
 
 def now() -> str:
@@ -187,6 +241,13 @@ def mcnemar(gained: int, lost: int) -> float:
     return min(1.0, 2 * sum(math.comb(n, k) * 0.5 ** n for k in range(low + 1)))
 
 
+def row_score(row: dict) -> tuple[int, int]:
+    """(matches, draws) for one scored set; an old row is one draw of one bit."""
+    if row.get("draws"):
+        return int(row.get("matches") or 0), int(row["draws"])
+    return int(bool(row.get("match"))), 1
+
+
 def paired_gain(before: dict, after: dict, pool: str = "family") -> dict | None:
     """The same held-out sets scored twice: gained, lost, and the exact p.
 
@@ -195,16 +256,20 @@ def paired_gain(before: dict, after: dict, pool: str = "family") -> dict | None:
     was accepted on 15 -> 18, which turned out to be +6/-3 (p=0.51), with two
     families moving in both directions. Pairing the tasks is what tells those
     apart, so the verdict reads this whenever both arms recorded their rows.
+
+    With two draws per set the comparison is on totals: a set counts as gained
+    when the candidate matched it more often than the champion did, and lost when
+    it matched it less. Sets scored under different rules are not paired at all.
     """
-    left = {r["task_id"]: bool(r.get("match"))
+    left = {r["task_id"]: row_score(r)
             for r in (before.get("rows") or {}).get(pool) or []}
-    right = {r["task_id"]: bool(r.get("match"))
+    right = {r["task_id"]: row_score(r)
              for r in (after.get("rows") or {}).get(pool) or []}
-    ids = [tid for tid in left if tid in right]
+    ids = [tid for tid in left if tid in right and left[tid][1] == right[tid][1]]
     if len(ids) < MIN_PAIRED_TASKS:
         return None
-    gained = sum(1 for tid in ids if not left[tid] and right[tid])
-    lost = sum(1 for tid in ids if left[tid] and not right[tid])
+    gained = sum(1 for tid in ids if right[tid][0] > left[tid][0])
+    lost = sum(1 for tid in ids if left[tid][0] > right[tid][0])
     return {"n": len(ids), "gained": gained, "lost": lost,
             "net": gained - lost, "p": round(mcnemar(gained, lost), 3)}
 
@@ -309,9 +374,70 @@ def merge_pairs(night_pairs: list[dict], mined: list[dict],
     return out
 
 
-def metrics(match: int, attempts: int) -> dict:
-    return {"match": match, "attempts": attempts,
-            "rate": round(match / attempts, 3) if attempts else 0.0}
+def metrics(match: int, attempts: int, build_failed: int | None = None) -> dict:
+    """A pool's score, split into "did not build" and "built but wrong".
+
+    The two are different problems with different fixes: Go's failures are
+    `undefined: sort` (a build), Python's are tracebacks (a wrong answer), and a
+    single number let the loop chase recipe changes for both. `build_failed`
+    counts sets that never compiled in any draw; the rest of the misses built
+    and printed something else.
+    """
+    out = {"match": match, "attempts": attempts,
+           "rate": round(match / attempts, 3) if attempts else 0.0}
+    if build_failed is not None:
+        out["build_failed"] = build_failed
+        out["built"] = max(0, attempts - build_failed)
+        out["wrong_output"] = max(0, attempts - build_failed - match)
+    return out
+
+
+def merge_draws(draws: list[list[dict]]) -> tuple[list[dict], dict]:
+    """One row per set carrying how many draws matched, plus the pool's counts.
+
+    A set that passed one draw and failed the other is the half-evidence that
+    makes a one-probe difference look real, so it is kept as a count rather than
+    collapsed into whichever decode finished last. `match` stays "at least one
+    draw", which is what a capability claim means: the model can write it.
+    """
+    merged: dict[str, dict] = {}
+    for rows in draws:
+        for row in rows:
+            tid = row.get("task_id")
+            if not tid:
+                continue
+            entry = merged.setdefault(tid, {"task_id": tid, "matches": 0,
+                                            "draws": 0, "compile": False})
+            if not row.get("skipped"):
+                entry["draws"] += 1
+            entry["compile"] = entry["compile"] or bool(row.get("compile"))
+            entry["matches"] += 1 if row.get("match") else 0
+    rows = [{"task_id": entry["task_id"],
+             "match": entry["matches"] > 0,
+             "matches": entry["matches"],
+             "draws": entry["draws"],
+             "compile": entry["compile"]} for entry in merged.values()]
+    attempts = sum(1 for row in rows if row["draws"])
+    match = sum(1 for row in rows if row["match"])
+    return rows, {"match": match, "attempts": attempts}
+
+
+def _took(t0: float, marks: dict[str, float]) -> dict:
+    """Seconds each stage of one cycle spent, and the cycle's own wall clock.
+
+    A cycle's cost is not one number: the night, the mining pass, the two
+    training runs and the scored gate were each bought separately, and the gate
+    got dearer when its probes started being repeated. Recording the split in
+    the journal is what lets a later run compare rounds by price as well as by
+    score.
+    """
+    out: dict[str, int] = {}
+    last = t0
+    for name, at in marks.items():
+        out[name] = round(at - last)
+        last = at
+    out["total"] = round(last - t0)
+    return out
 
 
 class Backend:
@@ -339,9 +465,21 @@ class Backend:
 class RealBackend(Backend):
     """The actual pipeline: ollama, the trainer, and the two held-out pools."""
 
-    def __init__(self, pools: dict | None = None) -> None:
+    def __init__(self, pools: dict | None = None,
+                 all_languages: bool = False, mix: str = "all",
+                 with_buildfix: bool = False) -> None:
         self.log_path = loop_dir() / LOG_FILE
         self.pools = pools or {}
+        # Off by default: a cycle trains on the five lanes. The lane-cut
+        # experiment turns it on to train on the corpus it had before the cut
+        # while still being judged on the same held-out sets.
+        self.all_languages = all_languages
+        # `mix="programs"` trains on whole programs only (no plan or repair
+        # rows); the mix A/B uses it and nothing else changes.
+        self.mix = mix
+        # `with_buildfix` adds repair rows mined from the night's build
+        # failures; the build-fix A/B turns it on and nothing else changes.
+        self.with_buildfix = with_buildfix
 
     # -- helpers ---------------------------------------------------------
     def _note(self, message: str) -> None:
@@ -431,17 +569,24 @@ class RealBackend(Backend):
 
     def train(self, cycle: int, levers: Levers, init: str, log) -> str:
         self._ollama(stop=True)
-        data = trainloop.prepare_data(by_family=True)
+        data = trainloop.prepare_data(by_family=True,
+                                      all_languages=self.all_languages,
+                                      mix=self.mix,
+                                      with_buildfix=self.with_buildfix)
         self._note(f"data prepared: night_rows={data['night_rows']} "
                    f"night_pairs={data['night_pairs']} "
                    f"library_rows={data['library_rows']} plan_rows={data['plan_rows']} "
-                   f"contract_rows={data['contract_rows']} holdout={data['holdout']}")
+                   f"contract_rows={data['contract_rows']} "
+                   f"buildfix_rows={data.get('buildfix_rows', 0)} "
+                   f"buildfix_pairs={data.get('buildfix_pairs', 0)} "
+                   f"holdout={data['holdout']}")
         out = config.data_dir() / "models" / f"auto{cycle}"
         argv = [sys.executable, "train_lora.py", "--mode", "sft",
                 "--train", str(config.dataset_dir() / "train.jsonl"),
                 "--val", str(config.dataset_dir() / "val.jsonl"),
                 "--model", self._base_model(), "--out", str(out),
-                "--max-steps", str(levers.sft_steps), "--seq-len", "1024"]
+                "--max-steps", str(levers.sft_steps), "--lr", str(TRAIN_LR),
+                "--seq-len", "1024"]
         if init:
             argv += ["--init-adapter", init]
         code = self._train(argv, log)
@@ -458,11 +603,27 @@ class RealBackend(Backend):
                 "--val-pairs", str(config.dataset_dir() / "auto_pairs_val.jsonl"),
                 "--model", self._base_model(), "--out", str(out),
                 "--init-adapter", init, "--max-steps", str(levers.orpo_steps),
-                "--seq-len", "1024"]
+                "--lr", str(TRAIN_LR), "--seq-len", "1024"]
         code = self._train(argv, log)
         if code != 0:
             raise RuntimeError(f"ORPO exited {code}")
-        return str(out / "adapter")
+        if not levers.rehearsal_steps:
+            return str(out / "adapter")
+        # Finish on the contract, not on the preference: the pairs are what the
+        # round is for, and the rehearsal is what keeps them from being bought
+        # with the no-fence and plan lanes. See `trainloop.rehearsal_sheet`.
+        sheet = trainloop.rehearsal_sheet(held, all_languages=self.all_languages)
+        rehearsal = out / "rehearsal"
+        argv = [sys.executable, "train_lora.py", "--mode", "sft",
+                "--train", str(sheet), "--model", self._base_model(),
+                "--out", str(rehearsal), "--init-adapter", str(out / "adapter"),
+                "--max-steps", str(levers.rehearsal_steps),
+                "--lr", str(TRAIN_LR), "--seq-len", "1024"]
+        code = self._train(argv, log)
+        if code != 0:
+            raise RuntimeError(f"contract rehearsal exited {code}")
+        self._note(f"contract rehearsal: {levers.rehearsal_steps} steps on {sheet.name}")
+        return str(rehearsal / "adapter")
 
     def evaluate(self, adapter: str, log) -> dict:
         from .localcoder import LocalCoder
@@ -472,28 +633,43 @@ class RealBackend(Backend):
         out: dict = {}
         for pool in ("family", "task"):
             tasks = self.pools.get(pool) or []
-            coder = LocalCoder(model, adapter=adapter) if adapter else LocalCoder(model)
-            try:
-                scored = functioneval.score(coder, tasks, 25)
-            finally:
-                coder.close()
-            stats = scored["stats"]
-            out[pool] = metrics(stats["match"], stats["attempts"])
+            draws: list[list[dict]] = []
+            for draw in range(EVAL_DRAWS):
+                # A fresh coder per draw: the same weights, the same prompt, a
+                # second sample. Greedy here would be the same answer twice.
+                coder = LocalCoder(model, adapter=adapter,
+                                   temperature=EVAL_TEMPERATURE,
+                                   top_p=EVAL_TOP_P) if adapter else LocalCoder(
+                    model, temperature=EVAL_TEMPERATURE, top_p=EVAL_TOP_P)
+                try:
+                    draws.append(functioneval.score(coder, tasks, 25)["rows"])
+                finally:
+                    coder.close()
+                self._note(f"{pool} draw {draw + 1}/{EVAL_DRAWS} scored")
+            rows, stats = merge_draws(draws)
+            build_failed = sum(1 for row in rows
+                               if row["draws"] and not row["compile"])
+            out[pool] = metrics(stats["match"], stats["attempts"], build_failed)
             # Kept so the next verdict can pair the same sets instead of
             # comparing two counts that a language swap can carry.
-            out.setdefault("rows", {})[pool] = [
-                {"task_id": row["task_id"], "match": bool(row.get("match")),
-                 "compile": bool(row.get("compile"))}
-                for row in scored["rows"] if row.get("task_id")]
+            out.setdefault("rows", {})[pool] = rows
         return out
 
     def gate(self, adapter: str, log) -> dict:
+        # The battery loads the base model itself; a warm Ollama GGUF next to it
+        # is two models in one card. Scoring already stops it, but the battery is
+        # also called on its own to re-measure the champion, so it stops it too.
+        self._ollama(stop=True)
         result = probes.evaluate(self._base_model(), adapter, samples=GATE_SAMPLES,
+                                 confirm=GATE_CONFIRM, temperature=GATE_TEMPERATURE,
+                                 top_p=GATE_TOP_P,
                                  log=lambda line: self._note(line))
         return {"passed": result["passed"], "total": result["total"],
                 "passed_ids": result["passed_ids"],
                 "lanes": probes.lane_stats(result),
-                "failures": [f["id"] for f in result["failures"]]}
+                "failures": [f["id"] for f in result["failures"]],
+                "rechecked": result.get("rechecked") or [],
+                "version": GATE_VERSION}
 
 
 class FakeBackend(Backend):
@@ -502,6 +678,7 @@ class FakeBackend(Backend):
     def __init__(self, improve: bool = True) -> None:
         self.improve = improve
         self.calls: list[str] = []
+        self.inits: list[str] = []
 
     def night(self, levers, log):
         self.calls.append("night")
@@ -513,6 +690,7 @@ class FakeBackend(Backend):
 
     def train(self, cycle, levers, init, log):
         self.calls.append("train")
+        self.inits.append(init)
         return f"fake/auto{cycle}/sft"
 
     def orpo(self, cycle, levers, init, log):
@@ -560,14 +738,17 @@ def run(cycles: int = 3, hours: float = 6.0, backend: Backend | None = None,
     log = log or (lambda line: None)
     state = read_state()
     pools = _pools(state)
-    tasks = {t["id"]: t for t in functionprobe.candidates()}
+    # Pool lookup ignores the lane cut: a frozen pool must resolve whole, or the
+    # candidate is scored on fewer sets than the champion and the verdicts compare
+    # two different measurements.
+    tasks = {t["id"]: t for t in functionprobe.pool_candidates()}
     backend = backend or RealBackend({key: [tasks[i] for i in ids if i in tasks]
                                       for key, ids in pools.items()})
     state.setdefault("cycle", 0)
     state.setdefault("best", None)
     state.setdefault("best_metrics", None)
     state.setdefault("tried", [])
-    state["levers"] = asdict(levers or Levers())
+    state["levers"] = asdict(levers or _stored_levers(state))
     save_state(state)
     # A pending stop file is honoured, not cleared: an unattended loop that
     # restarts itself must not overrule the person who stopped it.
@@ -590,6 +771,33 @@ def run(cycles: int = 3, hours: float = 6.0, backend: Backend | None = None,
                                  for k in ("family", "task", "gate", "rows") if k in baseline}
         journal({"cycle": 0, "at": now(), "baseline": baseline})
         save_state(state)
+    elif state.get("gate_version") != GATE_VERSION:
+        # The stored gate belongs to the rule that measured it. A candidate's
+        # 9/10 under sampling is not comparable to a champion's 9/10 under
+        # greedy decoding, so the bar is measured again before it judges anyone.
+        publish(stage="gate-baseline")
+        log("gate rule changed: re-measuring the champion's battery")
+        state["best_metrics"]["gate"] = backend.gate(state["best"], log)
+        save_state(state)
+        publish(best_metrics=state["best_metrics"])
+    state["gate_version"] = GATE_VERSION
+    save_state(state)
+
+    # Same rule for the scoring itself: one row per set was one draw, and a
+    # champion measured that way cannot be paired against a candidate measured
+    # on two. Measuring the champion again under the new rule is the price of a
+    # verdict that compares like with like.
+    if state.get("best_metrics") and state.get("eval_version") != EVAL_VERSION:
+        publish(stage="eval-baseline")
+        log(f"scoring rule changed: re-measuring the champion on {EVAL_DRAWS} draws")
+        rescored = backend.evaluate(state["best"], log)
+        for key in ("family", "task", "rows"):
+            if key in rescored:
+                state["best_metrics"][key] = rescored[key]
+        save_state(state)
+        publish(best_metrics=state["best_metrics"])
+    state["eval_version"] = EVAL_VERSION
+    save_state(state)
 
     started_cycle = int(state.get("cycle", 0)) + 1
     try:
@@ -598,26 +806,38 @@ def run(cycles: int = 3, hours: float = 6.0, backend: Backend | None = None,
                 publish(state="stopped", reason="stop file or budget")
                 break
             current = Levers(**state["levers"])
+            t0 = time.monotonic()
+            marks: dict[str, float] = {}
             publish(cycle=cycle, stage="night", levers=asdict(current))
             log(f"cycle {cycle}: night {current.night_hours}h, "
                 f"samples={current.samples}")
             night = backend.night(current, log)
+            marks["night"] = time.monotonic()
             publish(night=night, stage="mine")
             mined = backend.mine(current, log)
+            marks["mine"] = time.monotonic()
             publish(mined=mined, stage="train")
             init = state["best"] if (current.continue_from_best and state["best"]) else ""
             sft = backend.train(cycle, current, init, log)
+            marks["sft"] = time.monotonic()
             publish(stage="orpo", adapter=sft)
             candidate = backend.orpo(cycle, current, sft, log)
+            marks["orpo"] = time.monotonic()
             publish(stage="evaluate", adapter=candidate)
             scored = backend.evaluate(candidate, log)
+            marks["evaluate"] = time.monotonic()
             scored["gate"] = backend.gate(candidate, log)
+            marks["gate"] = time.monotonic()
             scored["adapter"] = candidate
 
             accepted, reason = judge(state["best_metrics"], scored)
+            took = _took(t0, marks)
+            log(f"cycle {cycle}: took {took['total']}s "
+                + " ".join(f"{name}={value}s" for name, value in took.items()
+                           if name != "total"))
             entry = {"cycle": cycle, "at": now(), "night": night, "mined": mined,
                      "candidate": scored, "accepted": accepted, "reason": reason,
-                     "levers": asdict(current)}
+                     "took": took, "levers": asdict(current)}
             journal(entry)
             state["cycle"] = cycle
             if accepted:
@@ -641,7 +861,7 @@ def run(cycles: int = 3, hours: float = 6.0, backend: Backend | None = None,
                 log(f"cycle {cycle}: rejected ({reason}); next lever: {note}")
             save_state(state)
             publish(cycle=cycle, stage="judged", accepted=accepted,
-                    reason=reason, best=state["best"],
+                    reason=reason, best=state["best"], took=entry["took"],
                     best_metrics=state.get("best_metrics"))
             write_report(state, history())
             if stop_requested() or time.monotonic() > deadline:

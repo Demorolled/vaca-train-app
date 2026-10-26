@@ -22,8 +22,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import (capture, config, contractsft, functioneval, functionprobe, librarysft,
-               overnight, plansft, preferences, probes, puzzlepairs, scaffoldsft)
+from . import (buildfix, capture, config, contractsft, functioneval, functionprobe,
+               librarysft, overnight, plansft, preferences, probes, puzzlepairs,
+               scaffoldsft)
 
 MIN_GAIN = 0.005
 STATUS_FILE = "trainloop.status.json"
@@ -93,6 +94,39 @@ def _read_jsonl(path: Path) -> list[dict]:
     return rows
 
 
+# One ORPO round leaves the contract lanes worse than it found them. The pairs
+# teach which of two builds is the smaller one, and a 1.5B model generalises
+# that into giving up the instruction-following the app depends on: fences came
+# back around every file, and a single-file plan request was answered with a
+# 24-line project. Neither shows up in preference accuracy — the round that went
+# 0.54 -> 0.61 scored 2/11 on the boundary probes while the SFT-only adapter it
+# started from scored 10/11.
+#
+# The round therefore ends by rehearsing the two sheets that teach exactly the
+# lanes the probes grade (`contractsft` for the refusal and the repair,
+# `scaffoldsft` for writing one file to fit its siblings). A few steps at the
+# same learning rate put the contract back on top of the preference gain, so the
+# round can be kept instead of being refused by its own gate.
+REHEARSAL_STEPS = 15
+REHEARSAL_FILE = "rehearsal.jsonl"
+
+
+def rehearsal_sheet(held: set[str] | None = None,
+                    all_languages: bool = False) -> Path:
+    """Write the contract rows a round rehearses after its preference pass.
+
+    `held` is the same family hold-out the round's other rows obey: a contract
+    row built from a held-out set teaches the files the split scores.
+    """
+    rows = [row for row in (contractsft.rows(all_languages=all_languages)
+                            + scaffoldsft.rows(all_languages=all_languages))
+            if not held or (row.get("meta") or {}).get("task_id") not in held]
+    out = config.dataset_dir() / REHEARSAL_FILE
+    out.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+                   encoding="utf-8")
+    return out
+
+
 def merge_pairs(extra_rows: list[dict], val_ratio: float = 0.1) -> dict:
     """Add puzzle rows to the tournament train/val sheets, deduped and re-split."""
     out = config.dataset_dir()
@@ -131,7 +165,15 @@ def merge_pairs(extra_rows: list[dict], val_ratio: float = 0.1) -> dict:
     return meta
 
 
-def prepare_data(by_family: bool = False, per_language: int = 1) -> dict:
+# The tournament sheet is self-selected "winners" rather than a verified program,
+# and the loop measured what it costs: the no-fence lane went 7/10 -> 3/10 when
+# those rows carried the mix. It was 22% of the SFT sheet by row count.
+DROPPED_SOURCES = ("tournament:winner",)
+
+
+def prepare_data(by_family: bool = False, per_language: int = 3,
+                 all_languages: bool = False, mix: str = "all",
+                 with_buildfix: bool = False) -> dict:
     """Export SFT rows (verified builds + verified app sets) and merge pairs in.
 
     A finished `trainapp.overnight` run exports its passing functions and its
@@ -141,11 +183,23 @@ def prepare_data(by_family: bool = False, per_language: int = 1) -> dict:
     `by_family` holds out whole program families (the fibonacci ask in every
     language) rather than single task ids. A task split leaves the siblings of
     a held-out set in training, so a family cannot be measured with it.
+
+    `mix="programs"` leaves out the plan and contract (repair/invent) rows, so a
+    round sees whole programs only. Those two sheets are 41% of the SFT rows and
+    they teach a different task shape; the mix A/B turns them off to see whether
+    they help or dilute the behaviour the held-out families score.
+
+    `with_buildfix=True` adds rows mined from the night's own build failures: the
+    compiler's complaint and the library's working function for the same ask.
+    It is off by default so the round that measures it is the round that asks for
+    it, and it obeys the same hold-out as every other source.
     """
+    programs_only = mix == "programs"
     night = overnight.load_export()
     # Only behaviour-verified night rows teach: a row that merely compiled is
     # the lesson that produced format-perfect, non-working code before.
     behaviour = [r for r in night["sft"] if r.get("verified") == "behaviour"]
+
     held = (functioneval.family_holdout_ids(functionprobe.candidates())
             if by_family else functioneval.holdout_task_ids(behaviour))
     fresh = [r for r in behaviour if r.get("task_id") not in held]
@@ -154,20 +208,37 @@ def prepare_data(by_family: bool = False, per_language: int = 1) -> dict:
     # Scaffold and plan rows are built from the library's multi-file sets. A row
     # for a held-out family's set teaches the very files the split is meant to
     # score, which would make the family number partly memory.
-    scaffold_rows = [r for r in scaffoldsft.rows()
+    scaffold_rows = [r for r in scaffoldsft.rows(all_languages=all_languages)
                      if (r.get("meta") or {}).get("task_id") not in held]
-    library_rows = librarysft.rows(per_language=per_language)
-    plan_rows = [r for r in plansft.rows()
+    library_rows = librarysft.rows(per_language=per_language,
+                                   all_languages=all_languages)
+    plan_rows = [r for r in ([] if programs_only else
+                             plansft.rows(all_languages=all_languages))
                  if (r.get("meta") or {}).get("task_id") not in held]
-    contract_rows = [r for r in contractsft.rows()
+    contract_rows = [r for r in ([] if programs_only else
+                                 contractsft.rows(all_languages=all_languages))
                      if (r.get("meta") or {}).get("task_id") not in held]
+    # Build-failure rows are held out by *family*, not by set: a repair row for
+    # the ISBN checksum in Kotlin teaches the same program the pool measures in
+    # Python, and an id-level hold-out would let it through.
+    held_families = (functioneval.holdout_families(functionprobe.pool_candidates())
+                     if with_buildfix else set())
+    buildfix_rows = ([r for r in buildfix.rows()
+                      if (r.get("meta") or {}).get("family") not in held_families]
+                     if with_buildfix else [])
+    buildfix_pairs = ([p for p in buildfix.pairs()
+                       if (p.get("meta") or {}).get("family") not in held_families]
+                      if with_buildfix else [])
     sft = capture.export_dataset(
-        extra_rows=library_rows + plan_rows + contract_rows + scaffold_rows + fresh)
+        extra_rows=(library_rows + plan_rows + contract_rows + scaffold_rows
+                    + fresh + buildfix_rows),
+        drop_sources=DROPPED_SOURCES)
     tournament = preferences.export_pairs()
     puzzle_rows = puzzlepairs.training_rows()
-    pairs = merge_pairs(puzzle_rows + night_pairs)
+    pairs = merge_pairs(puzzle_rows + night_pairs + buildfix_pairs)
     return {"sft": sft, "tournament": tournament, "pairs": pairs,
             "puzzle_pairs": len(puzzle_rows),
+            "dropped_sources": list(DROPPED_SOURCES),
             "library_rows": len(library_rows),
             "plan_rows": len(plan_rows),
             "contract_rows": len(contract_rows),
@@ -175,8 +246,12 @@ def prepare_data(by_family: bool = False, per_language: int = 1) -> dict:
             "scaffold_rows": len(scaffold_rows),
             "night_rows": len(fresh),
             "night_pairs": len(night_pairs),
+            "buildfix_rows": len(buildfix_rows),
+            "buildfix_pairs": len(buildfix_pairs),
             "night_holdout": len(behaviour) - len(fresh),
             "holdout": "family" if by_family else "task",
+            "mix": mix,
+            "all_languages": all_languages,
             "night_compile_only": len(night["sft"]) - len(behaviour)}
 
 
@@ -237,7 +312,7 @@ def _probe(model: str, adapter: Path, log) -> dict | None:
 
 def run(rounds: int = 2, sft_steps: int = 120, orpo_steps: int = 60,
         seq_len: int = 1024, skip_sft: bool = False, probe_gate: bool = True,
-        by_family: bool = False) -> dict:
+        by_family: bool = False, rehearsal_steps: int = REHEARSAL_STEPS) -> dict:
     log_path = loop_dir() / LOG_FILE
     models_dir = config.data_dir() / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
@@ -298,8 +373,24 @@ def run(rounds: int = 2, sft_steps: int = 120, orpo_steps: int = 60,
             meta = _meta(out)
             accuracy = (meta.get("val") or {}).get("accuracy")
             before = (meta.get("val_before") or {}).get("accuracy")
+            # Preference first, contract last: the rehearsal is what lets the
+            # round keep the pair gain without handing the lanes back (see
+            # `rehearsal_sheet`). The accuracy above is still ORPO's own number.
+            final = out
+            if rc == 0 and rehearsal_steps > 0:
+                held = functioneval.family_holdout_ids(functionprobe.candidates())
+                sheet = rehearsal_sheet(held)
+                publish(stage="rehearsal", round=index)
+                rc = _train([sys.executable, "train_lora.py", "--mode", "sft",
+                             "--train", str(sheet), "--model", base_model,
+                             "--out", str(out / "rehearsal"),
+                             "--init-adapter", str(out / "adapter"),
+                             "--max-steps", str(rehearsal_steps),
+                             "--seq-len", str(seq_len)], log)
+                if rc == 0:
+                    final = out / "rehearsal"
             entry = {"round": index, "exit": rc, "accuracy": accuracy,
-                     "before": before, "adapter": str(out), "at": _now()}
+                     "before": before, "adapter": str(final), "at": _now()}
             history.append(entry)
             publish(history=history, accuracy=accuracy, round=index)
             log.write(f"[{_now()}] round {index} exit={rc} accuracy={accuracy} "
@@ -321,7 +412,7 @@ def run(rounds: int = 2, sft_steps: int = 120, orpo_steps: int = 60,
             # re-introduced fences and dropped the reasoning lane. A round that
             # loses a probe the baseline passed is not a win, whatever it scored.
             if baseline_probes:
-                round_probes = _probe(base_model, out / "adapter", log)
+                round_probes = _probe(base_model, final / "adapter", log)
                 if round_probes:
                     broke = probes.regressions(baseline_probes, round_probes)
                     entry["probes"] = probes.summary(round_probes)
@@ -341,7 +432,7 @@ def run(rounds: int = 2, sft_steps: int = 120, orpo_steps: int = 60,
                         return publish()
             record(entry)
             best = accuracy if best is None else max(best, accuracy)
-            current = out
+            current = final
 
         publish(state="done", stage="rounds-exhausted", best_accuracy=best,
                 finished_at=_now(), reason=f"{rounds} round(s) completed")

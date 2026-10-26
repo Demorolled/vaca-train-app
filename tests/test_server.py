@@ -9,6 +9,8 @@ import unittest
 import urllib.error
 import urllib.request
 
+from unittest import mock
+
 from trainapp import server
 
 
@@ -171,6 +173,46 @@ class ServerTests(unittest.TestCase):
         status, body = self.call("/api/library/grow", "POST", {"seeds": 1})
         self.assertEqual(status, 409)
         self.assertIn("no confirmed runnable tasks", body["error"])
+
+    def test_builder_status_endpoint(self) -> None:
+        status, body = self.call("/api/builder/status")
+        self.assertEqual(status, 200)
+        self.assertIn("state", body)
+        self.assertIn("pool", body)
+
+    def test_builder_start_refuses_when_there_is_nothing_to_build(self) -> None:
+        status, body = self.call("/api/builder/start", "POST", {"languages": "cobol"})
+        self.assertEqual(status, 409)
+        self.assertIn("no briefs to build", body["error"])
+
+    def test_builder_start_refuses_an_unknown_connection(self) -> None:
+        status, body = self.call("/api/builder/start", "POST",
+                                 {"brief": "print 1", "connection": "nope"})
+        self.assertEqual(status, 409)
+        self.assertIn("no connection named", body["error"])
+
+    def test_orchestra_start_passes_the_callers_smoke_contract(self) -> None:
+        seen: dict = {}
+
+        def fake(**kwargs):
+            seen.update(kwargs)
+            return {"state": "running", "requirement": kwargs["requirement"]}
+
+        with mock.patch.object(server.orchestra, "start", side_effect=fake):
+            status, _ = self.call("/api/orchestra/start", "POST", {
+                "requirement": "count the lines in a file", "player": "agent-stock",
+                "smoke": "python cli.py notes.txt",
+                "inputs": ["notes.txt=alpha"], "expect": "1"})
+        self.assertEqual(status, 200)
+        self.assertEqual(seen["smoke"], "python cli.py notes.txt")
+        self.assertEqual(seen["inputs"], {"notes.txt": "alpha"})
+        self.assertEqual(seen["expect"], "1")
+
+    def test_orchestra_start_refuses_a_malformed_input_fixture(self) -> None:
+        status, body = self.call("/api/orchestra/start", "POST",
+                                 {"requirement": "x", "inputs": ["notes.txt"]})
+        self.assertEqual(status, 400)
+        self.assertIn("PATH=CONTENT", body["error"])
 
     def test_config_is_readable(self) -> None:
         status, body = self.call("/api/config")

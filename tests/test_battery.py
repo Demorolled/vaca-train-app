@@ -115,8 +115,26 @@ class ScoreTests(unittest.TestCase):
         self.assertEqual(stats["verify_rate"], 0.75)
         self.assertEqual(stats["behavior_checked"], 3)
         self.assertEqual(stats["behavior_matched"], 1)
-        self.assertEqual(stats["by_language"]["go"], {"attempts": 2, "verified": 2})
+        self.assertEqual(stats["by_language"]["go"]["attempts"], 2)
+        self.assertEqual(stats["by_language"]["go"]["verified"], 2)
+        self.assertEqual(stats["by_language"]["go"]["behavior_matched"], 1)
+        self.assertEqual(stats["by_language"]["go"]["avg_bytes"], 200)
+        self.assertEqual(stats["by_language"]["c"]["verify_rate"], 0.0)
         self.assertEqual(stats["avg_bytes"], 200)
+
+    def test_a_lane_that_stopped_building_is_visible_in_the_split(self) -> None:
+        """The trade a total hides: TypeScript compiles lost, Java behaviour won."""
+        rows = [
+            {"language": "typescript", "valid": False, "deterministic": True},
+            {"language": "typescript", "valid": False, "deterministic": True},
+            {"language": "java", "valid": True, "deterministic": True,
+             "stdout_match": True, "bytes": 120},
+        ]
+        stats = battery.language_stats(rows)
+        self.assertEqual(stats["typescript"]["verify_rate"], 0.0)
+        self.assertEqual(stats["typescript"]["avg_bytes"], 0)
+        self.assertEqual(stats["java"]["behavior_rate"], 1.0)
+        self.assertEqual(list(stats), ["java", "typescript"])
 
     def test_skipped_rows_do_not_count_as_attempts(self) -> None:
         stats = battery.score([{"language": "go", "skipped": True, "valid": False}])

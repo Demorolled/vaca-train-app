@@ -96,11 +96,14 @@ textarea#code:focus, input:focus, select:focus { outline: 1px solid var(--accent
 
 .field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
 .field.compact { gap: 2px; }
-input, select {
+input, select, .field textarea {
   background: #0e1018; color: var(--text); border: 1px solid var(--line);
   border-radius: 8px; padding: 8px 10px; font: inherit;
 }
 input#new-node-name { width: 100%; }
+.field textarea {
+  resize: vertical; min-height: 44px; font-family: var(--mono); font-size: 12px;
+}
 
 .actions { display: flex; gap: 8px; align-items: center; }
 button {
@@ -140,4 +143,14 @@ button.ghost { padding: 3px 8px; color: var(--muted); }
 .stats { font-family: var(--mono); font-size: 12px; color: var(--muted); }
 .stats b { color: var(--text); }
 .hint { color: #6f748c; font-size: 11px; margin: 0; }
+
+/* the band: a toggle, a seat and a hang-up per player */
+.band li { cursor: default; gap: 5px; flex-wrap: wrap; }
+.band li.off { opacity: .5; }
+.band li .name { flex: 1; min-width: 70px; }
+.band li select { padding: 3px 6px; font-size: 12px; }
+.band li input[type="checkbox"] { accent-color: var(--accent); }
+.band-add { display: grid; gap: 6px; }
+.band-add input { width: 100%; }
+.field.checkbox span { display: flex; align-items: center; gap: 6px; }
 .hidden { display: none !important; }

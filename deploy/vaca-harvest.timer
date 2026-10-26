@@ -1,0 +1,11 @@
+[Unit]
+Description=VACA harvest, once a month
+
+[Timer]
+OnCalendar=monthly
+# A machine that was off on the 1st harvests when it next comes up, once.
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target

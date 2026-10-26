@@ -82,10 +82,91 @@
         <input id="grow-seeds" type="number" min="1" max="50" value="3" title="seed tasks" />
         <button id="grow-start">Grow library</button>
       </div>
+      <div class="actions">
+        <button id="harvest-run" class="ghost" title="Read every build copy into the library">Harvest builds</button>
+        <span id="harvest-status" class="stats">—</span>
+      </div>
       <div class="bar"><div id="val-bar"></div></div>
       <div id="val-status" class="stats">—</div>
       <div id="grow-status" class="stats">growth: idle</div>
       <div id="judge-status" class="stats">judge: —</div>
+    </div>
+
+    <div class="block">
+      <div class="panel-head"><h2>Band</h2><span id="band-count" class="pill">—</span></div>
+      <ul id="band-list" class="list band"></ul>
+      <label class="field compact">
+        <span>Leader — runs the builds</span>
+        <select id="band-leader"></select>
+      </label>
+      <form id="band-add-form" class="band-add">
+        <input id="band-name" placeholder="name" autocomplete="off" />
+        <input id="band-model" placeholder="model" autocomplete="off" />
+        <input id="band-url" placeholder="http://host:11434/v1" autocomplete="off" />
+        <input id="band-key" type="password" placeholder="api key (blank for a local server)"
+               autocomplete="off" />
+        <button type="submit" class="ghost">Add player</button>
+      </form>
+      <label class="field compact checkbox">
+        <span><input id="band-copy" type="checkbox" /> Copy every build whole</span>
+      </label>
+      <div id="band-status" class="stats">—</div>
+      <p class="hint">One toggle and one seat per player. A seated player has to
+      move before it can be switched off. Any OpenAI-compatible server works —
+      a local one needs no key, so leave it blank.</p>
+    </div>
+
+    <div class="block">
+      <div class="panel-head"><h2>Orchestra</h2><span id="orch-state" class="pill">idle</span></div>
+      <label class="field compact">
+        <span>What to build</span>
+        <input id="orch-require" placeholder="a python CLI that prints the first 12 primes"
+               autocomplete="off" />
+      </label>
+      <div class="actions">
+        <input id="orch-language" value="python" title="language" autocomplete="off" />
+        <select id="orch-player" title="player"></select>
+        <input id="orch-attempts" type="number" min="1" max="5" value="3" title="passes" />
+        <button id="orch-start" class="primary">Build</button>
+      </div>
+      <label class="field compact">
+        <span>Run it as (optional)</span>
+        <input id="orch-smoke" placeholder="python cli.py notes.txt"
+               autocomplete="off" />
+      </label>
+      <label class="field compact">
+        <span>A correct run prints (optional)</span>
+        <input id="orch-expect" placeholder="5" autocomplete="off" />
+      </label>
+      <label class="field compact">
+        <span>Files it reads — one PATH=CONTENT per line (optional)</span>
+        <textarea id="orch-inputs" rows="2" placeholder="notes.txt=alpha"
+                  spellcheck="false"></textarea>
+      </label>
+      <p class="hint">These are yours, not the architect's: the gate runs the
+      program with that command, reads those files and compares the output, and
+      the blueprint cannot revise them. Leave them blank and it derives what it
+      can from the sentence — and, failing that, fails a run that prints nothing
+      when the job says it prints.</p>
+      <pre id="orch-log" class="console small">No orchestra run yet.</pre>
+    </div>
+
+    <div class="block">
+      <div class="panel-head"><h2>Builder</h2><span id="builder-state" class="pill">idle</span></div>
+      <label class="field compact">
+        <span>Connection</span>
+        <select id="builder-connection"></select>
+      </label>
+      <label class="field compact">
+        <span>Brief (empty = library apps)</span>
+        <input id="builder-brief" placeholder="a CLI that prints the first 20 primes" autocomplete="off" />
+      </label>
+      <div class="actions">
+        <input id="builder-langs" placeholder="python,go" autocomplete="off" />
+        <input id="builder-apps" type="number" min="1" max="10" value="1" title="apps" />
+        <button id="builder-start" class="primary">Build</button>
+      </div>
+      <pre id="builder-log" class="console small">No build yet.</pre>
     </div>
 
     <div class="block">

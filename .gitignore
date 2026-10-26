@@ -7,6 +7,17 @@ venv/
 data/models/
 data/runs/
 
+# Local connection list: endpoints, models and keys are per machine.
+config.json
+
+# Run copies and job status: written by the app as it runs.
+data/band/
+data/orchestra/
+data/builder/
+data/buildfix/
+data/autoloop/
+data/autoloop.status.json
+
 # Generated measurement artefacts: rebuilt by the probes, puzzles, tournament
 # and gate runners, so they stay out of version control.
 data/puzzles/

@@ -18,6 +18,19 @@ const els = {
   judgeStatus: $("judge-status"), tourState: $("tour-state"), tourTasks: $("tour-tasks"),
   tourStart: $("tour-start"), tourLog: $("tour-log"),
   growSeeds: $("grow-seeds"), growStart: $("grow-start"), growStatus: $("grow-status"),
+  harvestRun: $("harvest-run"), harvestStatus: $("harvest-status"),
+  orchState: $("orch-state"), orchRequire: $("orch-require"),
+  orchLanguage: $("orch-language"), orchPlayer: $("orch-player"),
+  orchAttempts: $("orch-attempts"), orchStart: $("orch-start"),
+  orchLog: $("orch-log"), orchSmoke: $("orch-smoke"), orchExpect: $("orch-expect"),
+  orchInputs: $("orch-inputs"),
+  bState: $("builder-state"), bConnection: $("builder-connection"), bBrief: $("builder-brief"),
+  bLangs: $("builder-langs"), bApps: $("builder-apps"), bStart: $("builder-start"),
+  bLog: $("builder-log"),
+  bandList: $("band-list"), bandCount: $("band-count"), bandLeader: $("band-leader"),
+  bandAdd: $("band-add-form"), bandName: $("band-name"), bandModel: $("band-model"),
+  bandUrl: $("band-url"), bandKey: $("band-key"), bandCopy: $("band-copy"),
+  bandStatus: $("band-status"),
 };
 
 async function api(path, method = "GET", body) {
@@ -338,6 +351,333 @@ els.growStart.onclick = async () => {
   }
 };
 
+/* ── band ──────────────────────────────────────────────────────────────── */
+
+const BAND_SEATS = ["coder", "builder", "judge"];
+
+function seatLabel(member) {
+  if (member.seats.length === 1) return member.seats[0];
+  return member.seats.length ? `${member.seats.length} seats` : "no seat";
+}
+
+function renderBand(data) {
+  const members = data.members || [];
+  const playing = members.filter((m) => m.enabled);
+  const lead = (data.leader && data.leader.name) || "";
+  els.bandCount.textContent = `${playing.length}/${members.length} on`;
+  els.bandStatus.textContent =
+    `${lead ? `${lead} leads` : "no leader"} · ` +
+    `${data.copy_builds ? "every build copied whole" : "build copies off"}`;
+  els.bandStatus.title = data.path || "";
+  els.bandStatus.style.color = lead ? "var(--muted)" : "var(--warn)";
+  els.bandCopy.checked = !!data.copy_builds;
+
+  els.bandLeader.innerHTML = "";
+  els.bandList.innerHTML = "";
+  for (const member of members) {
+    if (member.enabled) {
+      const option = document.createElement("option");
+      option.value = member.name;
+      option.textContent = `${member.name} — ${member.model}`;
+      els.bandLeader.appendChild(option);
+    }
+
+    const li = document.createElement("li");
+    li.className = member.enabled ? "band-row" : "band-row off";
+    li.innerHTML =
+      `<input type="checkbox" class="on" title="on / off" />` +
+      `<span class="name"></span><span class="lang"></span>` +
+      `<select class="seat"></select>` +
+      `<button class="ghost check" title="is it answering?">?</button>` +
+      `<button class="ghost hangup" title="hang up">×</button>`;
+    const name = li.querySelector(".name");
+    name.textContent = member.name + (member.leader ? " ★" : "");
+    name.title = `${member.model}\n${member.url}`;
+    li.querySelector(".lang").textContent = seatLabel(member);
+    li.querySelector(".on").checked = member.enabled;
+
+    const seat = li.querySelector(".seat");
+    if (!member.seats.length) {
+      const none = document.createElement("option");
+      none.value = "";
+      none.textContent = "no seat";
+      seat.appendChild(none);
+    }
+    for (const role of BAND_SEATS) {
+      const option = document.createElement("option");
+      option.value = role;
+      option.textContent = role;
+      seat.appendChild(option);
+    }
+    seat.value = member.seats[0] || "";
+    seat.onchange = () => {
+      if (!seat.value) return;
+      bandChange(`${member.name} now plays ${seat.value}`, "/api/band/seat",
+        { role: seat.value, name: member.name });
+    };
+    li.querySelector(".on").onchange = (event) =>
+      bandChange(`${member.name} switched ${event.target.checked ? "on" : "off"}`,
+        "/api/band/toggle", { name: member.name, enabled: event.target.checked });
+    li.querySelector(".hangup").onclick = () =>
+      bandChange(`${member.name} left the band`, "/api/band/remove",
+        { name: member.name });
+    li.querySelector(".check").onclick = async () => {
+      els.bandStatus.textContent = `asking ${member.name}…`;
+      els.bandStatus.style.color = "var(--muted)";
+      try {
+        const { probe } = await api("/api/band/probe", "POST", { name: member.name });
+        els.bandStatus.textContent = probe.up
+          ? `${member.name}: up${probe.served ? "" : ` — ${member.model} not served`}` +
+            `${probe.models.length ? ` (${probe.models.length} models)` : ""}`
+          : `${member.name}: ${probe.error}`;
+        els.bandStatus.style.color = probe.served ? "var(--ok)" : "var(--warn)";
+      } catch (err) {
+        els.bandStatus.textContent = err.message;
+        els.bandStatus.style.color = "var(--bad)";
+      }
+    };
+    els.bandList.appendChild(li);
+  }
+  if (lead) els.bandLeader.value = lead;
+
+  // The builder picks a player, so it only offers players that are switched on.
+  const chosen = els.bConnection.value;
+  els.bConnection.innerHTML = "";
+  for (const member of playing) {
+    const option = document.createElement("option");
+    option.value = member.name;
+    option.textContent = `${member.name} — ${member.model}`;
+    els.bConnection.appendChild(option);
+  }
+  const names = playing.map((m) => m.name);
+  els.bConnection.value = names.includes(chosen) ? chosen : (lead || names[0] || "");
+
+  // The orchestra offers the same players, the leader first by default.
+  const oPlayer = els.orchPlayer.value;
+  els.orchPlayer.innerHTML = "";
+  for (const member of playing) {
+    const option = document.createElement("option");
+    option.value = member.name;
+    option.textContent = `${member.name} — ${member.model}`;
+    els.orchPlayer.appendChild(option);
+  }
+  els.orchPlayer.value = names.includes(oPlayer) ? oPlayer : (lead || names[0] || "");
+}
+
+async function loadBand() {
+  renderBand(await api("/api/band"));
+}
+
+async function bandChange(note, path, body) {
+  try {
+    await api(path, "POST", body);
+    els.bandStatus.textContent = note;
+    els.bandStatus.style.color = "var(--muted)";
+  } catch (err) {
+    els.bandStatus.textContent = err.message;
+    els.bandStatus.style.color = "var(--bad)";
+  }
+  // Re-read either way: a refused change has to put the toggle back.
+  await loadBand().catch((err) => (els.bandStatus.textContent = err.message));
+}
+
+els.bandLeader.onchange = () =>
+  bandChange(`${els.bandLeader.value} leads`, "/api/band/leader",
+    { name: els.bandLeader.value });
+
+els.bandCopy.onchange = () =>
+  bandChange(
+    els.bandCopy.checked ? "every build is copied" : "build copies off",
+    "/api/band/copy", { enabled: els.bandCopy.checked });
+
+els.bandAdd.onsubmit = async (event) => {
+  event.preventDefault();
+  const body = {
+    name: els.bandName.value.trim(),
+    model: els.bandModel.value.trim(),
+    url: els.bandUrl.value.trim(),
+    api_key: els.bandKey.value.trim(),
+  };
+  if (!body.name || !body.model || !body.url) {
+    els.bandStatus.textContent = "a player needs a name, a model and a url";
+    els.bandStatus.style.color = "var(--bad)";
+    return;
+  }
+  await bandChange(`${body.name} joined the band`, "/api/band/add", body);
+  els.bandName.value = els.bandModel.value = els.bandUrl.value = "";
+  els.bandKey.value = "";
+};
+
+/* ── orchestra ────────────────────────────────────────────────────────── */
+
+// The bug tracker, pass by pass: a failing run's history is the interesting
+// part of it, and the console alone only shows the seats talking.
+function passLines(job) {
+  const lines = [];
+  for (const entry of (job.passes || [])) {
+    const failing = (entry.failing || []).join(", ");
+    lines.push(`pass ${entry.pass}: ${entry.passed ? "passed" : "failed"}`
+      + (entry.note ? ` — ${entry.note}` : "")
+      + (failing ? ` · failing: ${failing}` : ""));
+    const bugs = entry.bugs || [];
+    for (const bug of bugs.slice(0, 6)) {
+      lines.push(`  ${bug.resolved ? "✓" : "✗"} ${bug.path || "project"}: `
+        + String(bug.error || "").slice(0, 160));
+    }
+    if (bugs.length > 6) lines.push(`  … ${bugs.length - 6} more`);
+  }
+  return lines;
+}
+
+function renderOrchestra(job) {
+  if (!job || !job.state) return job && job.state;
+  els.orchState.textContent = job.state;
+  els.orchState.className = "pill " +
+    (job.state === "running" ? "ok" : job.state === "failed" ? "bad" :
+      job.state === "done" ? (job.passed ? "ok" : "bad") : "");
+  const running = job.state === "running";
+  els.orchStart.disabled = running;
+  const lines = [];
+  if (job.error) lines.push(`error: ${job.error}`);
+  if (job.requirement) lines.push(`build: ${job.requirement}`);
+  if (job.model) lines.push(`player: ${job.player || "leader"} — ${job.model}`);
+  if (job.smoke) lines.push(`run: ${job.smoke}`);
+  if (job.expect) lines.push(`expects: ${job.expect}`);
+  lines.push(...(job.log || []));
+  lines.push(...passLines(job));
+  if (job.state === "done") {
+    lines.push(job.passed
+      ? `✓ built ${job.files.length} file(s)`
+      : `✗ not built in ${job.attempts} pass(es)`);
+    if (job.path) lines.push(`copy: ${job.path}`);
+    for (const error of (job.errors || []).slice(0, 5)) lines.push(`  - ${error}`);
+  }
+  els.orchLog.textContent = lines.join("\n") || "No orchestra run yet.";
+  return job.state;
+}
+
+let orchestraPoll = null;
+
+async function pollOrchestra() {
+  const job = await api("/api/orchestra/status");
+  if (renderOrchestra(job) !== "running") {
+    clearInterval(orchestraPoll);
+    orchestraPoll = null;
+    els.orchStart.disabled = false;
+    await loadHarvest();
+  }
+}
+
+els.orchStart.onclick = async () => {
+  els.orchStart.disabled = true;
+  try {
+    const job = await api("/api/orchestra/start", "POST", {
+      requirement: els.orchRequire.value.trim(),
+      language: els.orchLanguage.value.trim() || "python",
+      player: els.orchPlayer.value,
+      attempts: Number(els.orchAttempts.value) || 3,
+      smoke: els.orchSmoke.value.trim(),
+      expect: els.orchExpect.value.trim(),
+      inputs: els.orchInputs.value.split("\n").map((line) => line.trim())
+        .filter(Boolean),
+    });
+    renderOrchestra(job);
+    if (!orchestraPoll) orchestraPoll = setInterval(pollOrchestra, 3000);
+  } catch (err) {
+    els.orchLog.textContent = err.message;
+    els.orchStart.disabled = false;
+  }
+};
+
+/* ── harvest ──────────────────────────────────────────────────────────── */
+
+async function loadHarvest() {
+  try {
+    const st = await api("/api/harvest/status");
+    els.harvestStatus.textContent = st.state === "never"
+      ? "never harvested"
+      : `${st.state} ${st.month || ""} · ${st.added || 0} task(s) from ` +
+        `${st.runs || 0} run(s)`;
+    els.harvestStatus.title = st.sheet || "";
+  } catch (err) {
+    els.harvestStatus.textContent = err.message;
+  }
+}
+
+els.harvestRun.onclick = async () => {
+  els.harvestRun.disabled = true;
+  els.harvestStatus.textContent = "reading the build copies…";
+  try {
+    const result = await api("/api/harvest/run", "POST", {});
+    els.harvestStatus.textContent = result.state === "skipped"
+      ? `skipped — ${result.reason}`
+      : `${result.added} task(s) from ${result.new_runs} new run(s) · ` +
+        `${result.sft_rows} training row(s)`;
+    await loadLibrary();
+  } catch (err) {
+    els.harvestStatus.textContent = err.message;
+  }
+  els.harvestRun.disabled = false;
+};
+
+/* ── builder ───────────────────────────────────────────────────────────── */
+
+function renderBuilder(st) {
+  if (!st || !st.state) return st && st.state;
+  els.bState.textContent = st.state;
+  els.bState.className =
+    "pill " + (st.state === "running" ? "ok" : st.state === "failed" ? "bad" : "");
+  els.bStart.disabled = st.state === "running";
+  const lines = [];
+  if (st.error) lines.push(`error: ${st.error}`);
+  if (st.model) lines.push(`model: ${st.model}`);
+  if (st.apps) lines.push(`${st.done || 0}/${st.apps} apps${st.current ? ` · now: ${st.current}` : ""}`);
+  for (const record of st.records || []) {
+    lines.push(`${record.ok ? "✓" : "✗"} ${record.id} (${record.language}) ` +
+      `${record.files.length} file${record.files.length === 1 ? "" : "s"}, ` +
+      `${record.runs} run${record.runs === 1 ? "" : "s"}` +
+      `${record.conventions ? ", used copied conventions" : ""}` +
+      `${record.added ? "" : " (already in pool)"}`);
+  }
+  const lanes = Object.entries(st.scaffold || {});
+  if (lanes.length) {
+    lines.push("conventions on file: " + lanes
+      .map(([lang, s]) => `${lang} ${s.built}/${s.models}`).join(" · "));
+  }
+  els.bLog.textContent = lines.join("\n") || "No build yet.";
+  return st.state;
+}
+
+let builderPoll = null;
+
+async function pollBuilder() {
+  const st = await api("/api/builder/status");
+  const builderState = renderBuilder(st);
+  if (builderState !== "running") {
+    clearInterval(builderPoll);
+    builderPoll = null;
+    els.bStart.disabled = false;
+    loadLibrary();
+  }
+}
+
+els.bStart.onclick = async () => {
+  els.bStart.disabled = true;
+  try {
+    await api("/api/builder/start", "POST", {
+      connection: els.bConnection.value,
+      brief: els.bBrief.value.trim(),
+      languages: els.bLangs.value.trim(),
+      apps: Number(els.bApps.value) || 1,
+    });
+    if (!builderPoll) builderPoll = setInterval(pollBuilder, 3000);
+    await pollBuilder();
+  } catch (err) {
+    els.bLog.textContent = err.message;
+    els.bStart.disabled = false;
+  }
+};
+
 /* ── tournament ────────────────────────────────────────────────────────── */
 
 function renderTournament(st) {
@@ -446,6 +786,7 @@ els.trainStop.onclick = async () => {
     els.model.value = config.training.model;
     els.steps.value = config.training.max_steps;
     await Promise.all([loadToolchains(), loadNodes(), loadDataset(), loadLibrary()]);
+    await loadBand();
     renderTrainStatus(await api("/api/train/status"));
     const validationState = renderValidation(await api("/api/library/validate/status"));
     if (validationState === "running") validationPoll = setInterval(pollValidation, 2000);
@@ -453,6 +794,11 @@ els.trainStop.onclick = async () => {
     if (tournamentState === "running") tournamentPoll = setInterval(pollTournament, 4000);
     const growState = renderGrow(await api("/api/library/grow/status"));
     if (growState === "running") growPoll = setInterval(pollGrow, 3000);
+    const builderState = renderBuilder(await api("/api/builder/status"));
+    if (builderState === "running") builderPoll = setInterval(pollBuilder, 3000);
+    const orchestraState = renderOrchestra(await api("/api/orchestra/status"));
+    if (orchestraState === "running") orchestraPoll = setInterval(pollOrchestra, 3000);
+    await loadHarvest();
   } catch (err) {
     setStatus(`boot failed: ${err.message}`, true);
   }

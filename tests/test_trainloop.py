@@ -46,6 +46,25 @@ class TrainLoopTests(unittest.TestCase):
             for row in rows:
                 handle.write(json.dumps(row) + "\n")
 
+    def test_the_rehearsal_sheet_is_written_where_the_trainer_reads_it(self) -> None:
+        """ORPO's last pass rehearses the contract from a real file path."""
+        path = trainloop.rehearsal_sheet()
+        self.assertEqual(path, self.dataset / "rehearsal.jsonl")
+        self.assertTrue(path.exists())
+
+    def test_rehearsal_rows_obey_the_family_holdout(self) -> None:
+        contract = [
+            {"instruction": "i", "input": "x", "output": "print(1)\n",
+             "source": "contract", "meta": {"task_id": "held/one"}},
+            {"instruction": "i", "input": "y", "output": "print(2)\n",
+             "source": "contract", "meta": {"task_id": "kept/two"}},
+        ]
+        with mock.patch.object(trainloop.contractsft, "rows", return_value=contract), \
+                mock.patch.object(trainloop.scaffoldsft, "rows", return_value=[]):
+            path = trainloop.rehearsal_sheet({"held/one"})
+        rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual([row["output"] for row in rows], ["print(2)\n"])
+
     def test_merge_keeps_the_existing_split_and_adds_puzzle_rows(self) -> None:
         tournament = [pair(n) for n in range(30)]
         self.write("pairs_train.jsonl", [r for r in tournament if bucket(r) >= 10])
@@ -104,6 +123,41 @@ class TrainLoopTests(unittest.TestCase):
         val = [json.loads(l) for l in
                (self.dataset / "val.jsonl").read_text().splitlines()]
         self.assertIn("def main():\n    print(42)\n", [r["output"] for r in train + val])
+
+    def test_the_lane_cut_can_be_lifted_for_one_build(self) -> None:
+        """The experiment that asks what the cut cost trains on the whole sheet."""
+        seen: dict = {}
+
+        def fake_rows(**kwargs):
+            seen.update(kwargs)
+            return []
+
+        with mock.patch.object(trainloop.librarysft, "rows", side_effect=fake_rows), \
+                mock.patch.object(trainloop.plansft, "rows", side_effect=fake_rows), \
+                mock.patch.object(trainloop.contractsft, "rows", side_effect=fake_rows), \
+                mock.patch.object(trainloop.scaffoldsft, "rows", side_effect=fake_rows):
+            stats = trainloop.prepare_data(all_languages=True)
+        self.assertTrue(stats["all_languages"])
+        self.assertTrue(seen.get("all_languages"))
+
+    def test_a_programs_only_mix_drops_the_plan_and_contract_sheets(self) -> None:
+        """The mix A/B: whole programs only, and the other sheets are not built."""
+        called: list[str] = []
+
+        def fake_rows(**kwargs):
+            called.append(kwargs.get("all_languages"))
+            return []
+
+        with mock.patch.object(trainloop.librarysft, "rows", side_effect=fake_rows), \
+                mock.patch.object(trainloop.plansft, "rows", side_effect=fake_rows), \
+                mock.patch.object(trainloop.contractsft, "rows", side_effect=fake_rows), \
+                mock.patch.object(trainloop.scaffoldsft, "rows", side_effect=fake_rows):
+            stats = trainloop.prepare_data(mix="programs")
+        self.assertEqual(stats["mix"], "programs")
+        self.assertEqual(stats["plan_rows"], 0)
+        self.assertEqual(stats["contract_rows"], 0)
+        # librarysft + scaffoldsft only: the plan and contract builders never run.
+        self.assertEqual(len(called), 2)
 
     def test_a_family_holdout_keeps_every_sibling_out_of_training(self) -> None:
         export = Path(self.tmp.name) / "overnight" / "export"

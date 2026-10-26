@@ -1,17 +1,17 @@
 {
-  "total_pairs": 1793,
-  "train_pairs": 1612,
-  "val_pairs": 181,
+  "total_pairs": 2125,
+  "train_pairs": 1912,
+  "val_pairs": 213,
   "val_ratio": 0.1,
   "source": "tournament+puzzle:preference",
-  "exported_at": "2026-10-23T00:35:40+00:00",
+  "exported_at": "2026-10-25T15:22:21+00:00",
   "pairs_path": "/home/homellmlab/Desktop/vaca-train-app/data/dataset/pairs.jsonl",
   "train_path": "/home/homellmlab/Desktop/vaca-train-app/data/dataset/pairs_train.jsonl",
   "val_path": "/home/homellmlab/Desktop/vaca-train-app/data/dataset/pairs_val.jsonl",
   "puzzle_pairs": 101,
   "sources": {
-    "tournament": 1697,
+    "tournament": 2029,
     "puzzle": 101
   },
-  "merged_at": "2026-10-23T00:35:40+00:00"
+  "merged_at": "2026-10-25T15:22:21+00:00"
 }

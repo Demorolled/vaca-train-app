@@ -1,9 +1,11 @@
 # Train App
 
 > **Build notice:** VACA is in active reconstruction after an outside source
-> poisoned the training loop. The model is retraining from a clean base, and the
-> next build adds reverse-anything reconstruction, dual LLM connections with
-> per-task routing, and drag-and-drop node trees.
+> poisoned the training loop. The harness and the corpus are rebuilt and running
+> **now** — see [Run it](#run-it-linux-and-windows) and then
+> [give it more than one model](#give-it-more-than-one-model) before you judge a
+> build. The model itself is retraining from a clean base; the notice is
+> temporary and comes down after December.
 > [Read the full notice →](NOTICE.md)
 
 A small, standalone implementation of the 80/20 architecture: a
@@ -59,6 +61,11 @@ transformers, peft and datasets — and it runs on the GPU box, not here.
 | `trainapp/probes.py` | Contract gate: the boundary probes a round must not regress on (fences, scaffolds, reasoning lanes) |
 | `trainapp/localcoder.py` | Serves an HF model ± a PEFT adapter behind the same `complete()` seam |
 | `trainapp/grow.py` | Grows the library from judged, measured, verified improvements only |
+| `trainapp/band.py` | The band: any number of connections, a toggle and a seat each, one leading; copies every build whole |
+| `trainapp/board.py` | The blackboard: one shared board, four owned sections, a read/write policy per seat, a filtered view per call |
+| `trainapp/orchestra.py` | Four seats — architect, tech lead, developer, QA — write one app; bounded repair loop, toolchain last |
+| `trainapp/harvest.py` | Reads every finished build copy, logs the run, adds verified builds to the library, cuts a monthly sheet |
+| `trainapp/relay.py` | A seat a person answers by hand, for models with no endpoint and no key |
 | `trainapp/server.py` | HTTP API + static UI, stdlib only |
 | `trainapp/static/` | The canvas: nodes, editor, harness console, toolchains, dataset, training |
 | `train_lora.py` | QLoRA SFT over `{instruction, input, output}` JSONL |
@@ -487,6 +494,342 @@ everything. At 25 tasks `fast` wins most often, and the winner is only ~2% small
 than the reference — because these seeds are the library's own confirmed code, not
 naive implementations. The 7 unverified variants are real failures (compiler
 rejects), not judge opinions.
+
+### The band: any number of connections
+
+The app never hard-codes a model. Every named connection in `config.json` is a
+**player**: it can be switched on or off, it can hold one of the three seats
+(`coder`, `builder`, `judge`), and one player **leads**. The band panel is a row
+per player — a toggle, a seat selector, a hang-up button, and a `?` that asks the
+server whether it is answering and actually serves the model named.
+
+```json
+"band": { "leader": "llm", "copy_builds": true },
+"roles": { "coder": "llm", "builder": "builder", "judge": "judge" }
+```
+
+`llm` is Qwen2.5-Coder-14B and leads; it is also the connection the builder uses
+when no player is named. `builder` (Qwen3-Coder-30B over the tailnet) and `judge`
+hold the other two seats.
+
+**Adding a player needs no key and no code.** A local server — Ollama, LM
+Studio, llama.cpp, vLLM, anything OpenAI-compatible — is reachable by URL alone:
+
+```bash
+curl -X POST localhost:8137/api/band/add -H 'Content-Type: application/json' -d \
+  '{"name":"lmstudio","model":"qwen2.5-coder-7b","url":"http://127.0.0.1:1234/v1"}'
+curl -X POST localhost:8137/api/band/seat -H 'Content-Type: application/json' -d \
+  '{"role":"coder","name":"lmstudio"}'
+curl -X POST localhost:8137/api/band/probe -H 'Content-Type: application/json' -d \
+  '{"name":"lmstudio"}'
+```
+
+`kind` is the wire protocol, not the vendor: `ollama` uses the native chat API
+(the only one that also returns the model's thinking text), `openai` is any
+OpenAI-compatible server, and `relay` is the manual seat described below. `api_key` is optional and blank by default — when
+it is empty no `Authorization` header is sent at all, which is what every local
+server expects. Fill it for a hosted endpoint that issues one; the key is never
+returned by the API, only `needs_key: true`.
+
+Three refusals keep the band honest, each with the reason in the error:
+
+- a player that **leads** cannot be switched off or hung up until another
+  connection leads;
+- a player that **holds a seat** cannot be switched off or hung up until the
+  seat moves (a seat takes one player, so seating another moves it);
+- a **switched-off** player is refused by `chat_for`, `seat` and the builder
+  rather than quietly used.
+
+**Every build is copied whole.** `band.copy_builds` is on by default; after each
+app the builder writes `data/builds/<stamp>/<model>--<task>/` holding
+`record.json`, every final file under `files/`, the file set of any attempt that
+differed from the one that shipped, `attempt-N-plan.md` / `attempt-N-files.md`
+with the model's own reasoning, and `build.txt` with the command, exit code and
+output. The pool dedupes; the copy does not — a build that failed twice before
+passing keeps both failed sets, so the run can be read, re-scored or mined after
+the pool has moved on.
+
+### Offline only: models on this box, no keys
+
+Nothing in the band needs a key. A local server is a URL and a model name, and
+the empty `api_key` means no `Authorization` header is sent at all:
+
+```bash
+# Ollama, native chat (this is the leader's own box setup)
+curl -X POST localhost:8137/api/band/add -H 'Content-Type: application/json' -d \
+  '{"name":"ollama","model":"qwen2.5-coder:14b","url":"http://127.0.0.1:11434"}'
+
+# LM Studio, llama.cpp server, vLLM — all OpenAI-compatible, all keyless
+curl -X POST localhost:8137/api/band/add -H 'Content-Type: application/json' -d \
+  '{"name":"lmstudio","model":"qwen2.5-coder-7b","url":"http://127.0.0.1:1234/v1"}'
+
+curl -X POST localhost:8137/api/band/seat -H 'Content-Type: application/json' -d \
+  '{"role":"builder","name":"lmstudio"}'
+curl -X POST localhost:8137/api/band/probe -H 'Content-Type: application/json' -d \
+  '{"name":"lmstudio"}'
+```
+
+`probe` is how you know it is really there: it asks `/api/tags` and then
+`/v1/models` and reports whether the named model is actually served, so an
+empty answer is a real answer rather than a mysterious failure later.
+
+### Chat-only models: the relay seat
+
+Some models cannot be connected at all — Freebuff, the ChatGPT / Claude /
+Gemini web apps, anything you reach by typing into a page. They expose no
+endpoint and issue no key: the session belongs to the client, not to you, and
+driving their private backend would be brittle and against their terms. The
+honest way to put one in the band is a **relay seat**: VACA writes the prompt to
+disk, you paste it into whichever chat window you like, and you paste the answer
+back. The seat returns exactly the text the model gave you.
+
+```bash
+# a player with no URL at all
+curl -X POST localhost:8137/api/band/add -H 'Content-Type: application/json' -d \
+  '{"name":"webbrain","model":"chat-ui-model","kind":"relay"}'
+
+python3 -m trainapp.relay --pending          # what is waiting
+python3 -m trainapp.relay --show <id>        # the exact text to paste
+python3 -m trainapp.relay --answer <id> --file reply.txt
+```
+
+Requests live in `data/relay/outbox/<id>.json`, answers in `inbox/`, and both
+move to `archive/` once the seat collects them — so `--pending` never lists a
+prompt twice. The seat blocks until answered (`timeout_s`, 1 h by default), and
+a timeout says which id to answer rather than failing silently. A relay player
+needs no key, sends nothing anywhere, and can hold any seat, including the
+leader — which is how you can run a whole four-seat build on a model that only
+exists in a browser tab.
+
+One limit, stated plainly: it is one paste per seat per pass. A four-seat build
+is four hand-offs, and every repair pass adds one more. For anything more than
+an occasional run, an offline model on a socket is faster.
+
+### The orchestra: four seats write the app
+
+`orchestra` is the band doing a job, not a connection list. One requirement goes
+through four personas in order, each with its own system prompt and its own
+output shape:
+
+| seat | produces | cannot |
+|---|---|---|
+| architect | JSON blueprint: tree, files + purpose, entry point, `run` command, fixture `inputs`, `expected_stdout`, dependencies — the last three only when the request left them open | write code, or be asked to fix any |
+| tech lead | markdown logic per file: steps, state, edge cases | emit code |
+| developer | complete files as `FILE: path` blocks | invent a path |
+| QA | JSON verdict: `PASSED` / `FAILED`, errors, scope, files, checked against the manifest | overrule the toolchain |
+
+#### The blackboard, not a chat chain
+
+Seats do not pass chat history to each other. They share one board
+(`trainapp/board.py`) and each is handed a *view* of it — a filter, computed at
+call time from what that seat is allowed to read. Four sections, one owner each:
+
+| section | owner | holds |
+|---|---|---|
+| `project_manifest` | architect | path → the functional requirement of that file (plus `tree`, `entry`, `dependencies`, and the `run` command / fixture `inputs` / `expected_stdout` the request left open) |
+| `design_ledger` | tech lead | path → algorithm, steps, state kept, edge cases |
+| `code_repository` | developer | path → the source |
+| `bug_tracker` | QA | append-only failures: path, error, scope, attempt, toolchain flag, time, resolved |
+
+| seat | writes | reads |
+|---|---|---|
+| architect | `project_manifest` | (the requirement only) |
+| tech lead | `design_ledger` | `project_manifest` |
+| developer | `code_repository` | `project_manifest`, `design_ledger`, `code_repository`, `bug_tracker` |
+| QA | `bug_tracker` (append + resolve) | `code_repository`, `project_manifest` |
+
+A seat that writes a section it does not own raises `BoardPermission`; so does
+one that reads a section it has no claim on. This is the difference between the
+blackboard and a prompt chain — the boundary is a check, not a request. The code
+is the single source of truth, so a repair pass is a *commit* of one file, not a
+re-statement of the project.
+
+The coder's files are handed to `execution.run_files`, and **both** QA and the
+real toolchain have to pass: a model that says `PASSED` over `print(` still
+fails, and the compiler's words are what the developer gets next — written to
+the board as a `toolchain: true` bug on the same file. A failure with
+`scope: "design"` goes back to the tech lead instead of the coder. The loop is
+capped at 3 passes.
+
+Two boundaries do the structural work:
+
+- **The developer may not invent a file.** It writes `REQUEST_FILE: path — purpose`
+  and the state returns to the architect, because a new file is a blueprint
+  change. That round consumes one of the three passes, so it cannot run away.
+  A path it slips in unannounced is refused at the commit, not filtered later.
+- **A repair sees only the files QA blamed** — `board.view("developer", only=failing)`
+  returns those files' code, their ledger entries and their open bugs, and
+  nothing else. That is cheaper and much harder to corrupt: an untouched file
+  cannot be accidentally rewritten by a defensive model. Two things keep the
+  filter narrow over three passes: a new verdict resolves the per-file bugs it
+  did not repeat (`resolve_stale`), and a toolchain failure is attributed to the
+  file the compiler named rather than left pathless — otherwise the coder gets
+  the whole project back on every pass.
+
+#### Exercising the build: `--smoke`, `--input`, `--expect`
+
+A program the requirement exercises with an argument is run the way the
+requirement says, not bare. The invocation is `builder.args_from_run` over the
+`run` command — the same convention the builder's plan already uses. Without it
+a line counter run as `python cli.py` prints its usage and exits 1, and the gate
+blames the code for a failure the invocation caused.
+
+The caller says it first. `--smoke` fixes the invocation, `--input PATH=CONTENT`
+supplies a file the program reads, `--expect TEXT` says what a correct run
+prints. All three go on the board before the architect speaks, and it cannot
+revise them: a model that writes both the code and the data it runs against can
+agree with itself, so the test data is not written by the model being tested.
+What the request leaves open the architect fills; `blueprint.json` records which
+of the two said so (`run_from`, `inputs_from`, `stdout_from`).
+
+`--expect` is the check that makes fixture data mean something. An exit code of
+0 only says the program did not crash — a build that ignores its input and
+prints a constant exits 0 and passes every earlier gate. The expected output is
+compared (whitespace-trimmed, otherwise exact), so `Hello, ada!` against
+`Hello, ada` fails; the seats that write the code are shown the same contract,
+because a gate nobody was told about punishes punctuation instead of testing the
+job. Fixtures are written to the scratch directory for the run and never copied
+into `files/`: the app ships without its test data.
+
+When nobody states an expectation, one is derived from the requirement itself
+(`trainapp/expect.py`): a quoted literal (`prints "Hello, ada"`), a plain number,
+`the sum/product/difference/quotient of 2 and 3`, or `2 + 3`. A derivation is
+recorded as `derived` with the rule that produced it, because the sentence is
+weaker evidence than the caller's word. Anything needing an oracle — "the first
+12 primes", "the current date" — is left alone, and the fallback is that a
+requirement saying it prints must print something: exit 0 with empty stdout
+fails. `matches` is `unknown` in the copy when there was nothing to compare, so
+a pass that rested on an exit code cannot read as a checked one.
+
+Two limits are enforced rather than asked for, both found by running the band
+across the toolchains:
+
+- **`run`/`inputs` are only offered when the requirement names an input**
+  (`argument`, `file`, `path`, `stdin`, `line`, ...). Offered unconditionally,
+  the field reads as an invitation: a 14B asked for `inputs` on "print the sum
+  of 2 and 3" designed a file-reading CLI and then failed the requirement it was
+  given. `--smoke` is the escape hatch when the guess is wrong.
+- **QA reads the manifest**, so it reviews the code against the job as planned.
+  Given only the requirement, it invents requirements no other seat was given
+  and fails a build for doing what its blueprint said.
+
+Both structured seats ask the server for JSON rather than parsing prose after
+the fact — `response_format` on an OpenAI-compatible player, `format: json` on
+`kind: ollama`. Parsing is still tolerant, validation is not: a reply with no
+usable blueprint is an error, not an empty app.
+
+```bash
+python3 -m trainapp.orchestra --require "a python CLI that prints the first 12 primes"
+python3 -m trainapp.orchestra --require "..." --player lmstudio --attempts 2 --out /tmp/run
+
+# the caller's own statement of how it is run, against what, and what it prints
+python3 -m trainapp.orchestra \
+    --require "a python CLI that counts the lines in a file, exiting 1 if missing" \
+    --smoke "python cli.py notes.txt" --input "notes.txt=alpha" --expect "1"
+
+# one player per seat: the bulk on one model, the review on another
+python3 -m trainapp.orchestra --require "..." \
+    --player agent-stock --seat qa=agent-vaca --seat architect=agent-stock
+```
+
+`--seat seat=player` (or `chats={"qa": player}` in Python) gives any of the
+four seats its own model; a seat with no override uses the run's player. The
+copy's `state.json` records `seats` — which model actually sat where — because
+a result means nothing without it.
+
+It uses whichever player is named, or the leader when none is. The **Orchestra**
+panel runs the same thing from the app — requirement, language, player, passes,
+the smoke command, the expected output, the files it reads (one `PATH=CONTENT`
+per line), a `Build` button, and each seat's line as it happens
+(`POST /api/orchestra/start` takes `smoke`, `expect` and `inputs` too, the last
+as a mapping or as those `PATH=CONTENT` strings; `GET /api/orchestra/status`
+echoes back what the run was told to do). The panel also renders the **bug
+tracker pass by pass** — pass number, whether it passed, the files it blamed and
+the bugs it recorded — from `status.passes`, which the job publishes as each
+pass lands rather than only when the copy is written.
+
+Every run is copied to `data/band/<stamp>/<requirement>/`: `blueprint.json`,
+`reasoning.md`, `qa.jsonl` (one verdict per pass), `bugs.jsonl` (the whole bug
+tracker, resolved entries included), `files/` (what shipped),
+`attempt-N/files/` (every pass that was written), `build.txt`, `state.json`,
+`notes.txt`. The function is `async` (`asyncio.to_thread` around the blocking
+clients), so seats can be overlapped later without changing a signature;
+`orchestra.run` is the synchronous door.
+
+### Measured: two models on the agent box
+
+Both models resident at once on `llmlab-agent` (2× RTX 3060 12 GB), after
+unloading the 30B that was holding 20 GB:
+
+| model | size | placed | context |
+|---|---|---|---|
+| `qwen2.5-coder:14b` (stock, the worker) | 9.8 GB | 100% GPU | 8192 |
+| `vaca-r40-q4` (VACA's tuned model, the reviewer) | 10 GB | 100% GPU | 8192 |
+
+Two builds with the stock 14B on architect, tech lead and developer and VACA's
+model on QA — the split the band exists for:
+
+| brief | wall | passes | result |
+|---|---|---|---|
+| first 12 primes, one file | 14.8 s | 1 | built; prints 2…37, verified by running it |
+| `fibonacci.py` + `main.py`, named function, cross-file import | 21.3 s | 1 | built; `from fibonacci import first` correct, prints 0…89 |
+
+Per seat (second build): architect 3.4 s, tech lead 11.6 s, developer 5.1 s,
+QA 1.1 s. The pattern is the expected one — the tech lead's plan is the slow
+part, and QA's review is cheap because it only reads a small set.
+
+Two things this does not show: n=2 is not a quality measurement, and both
+briefs are small. It does show the wiring: two models, one endpoint, a real
+toolchain pass, and both artifacts correct when run by hand afterwards.
+
+### Harvesting every build (monthly)
+
+Two records are kept per build, and they are deliberately different:
+
+- the **run** — requirement, blueprint, design, every attempt, every QA verdict,
+  which player ran it — goes to `library/band_runs.jsonl`. A failed build is as
+  informative as a passing one here, and nothing in this file is trained on.
+- the **task** — only a build whose own toolchain run passed — becomes one
+  library entry in `library/band_builds.jsonl` with a `verified` validation
+  record, origin `band-build`. That is what a later SFT sheet can learn from.
+
+The copies on disk (`data/band/…` from the orchestra, `data/builds/…` from the
+builder) are the only source, so a build that never finished cannot become a
+task by accident. Ingestion dedupes on the code's content hash — the same key
+the rest of the library uses — so running it twice adds nothing twice.
+
+An orchestra run enters the library only when the gate actually **compared its
+output** (`build.matches: true`). A pass whose expectation was unknown prints
+what it prints and exits 0; that is not evidence of an app, so the run is logged
+in `runs.jsonl` and held back, and the summary counts it under `unchecked`.
+Builder copies carry no output comparison at all, so `checked` is `null` for
+them and their own gate (`record.ok`) is all they claim.
+
+```bash
+python3 -m trainapp.harvest --scan        # what is on disk
+python3 -m trainapp.harvest --monthly     # ingest + this month's sheets
+python3 -m trainapp.harvest --status      # when it last ran, what it kept
+```
+
+`--monthly` is the scheduled door and refuses to run twice inside 28 days
+unless `--force`, so a restart cannot re-cut a month. It ingests, rebuilds the
+library index, and writes `library/harvest/<YYYYMM>.jsonl` (the tasks gathered
+that month) and `<YYYYMM>_sft.jsonl` (their training rows). File sets are
+harvested as tasks but **not** flattened into one SFT row — a set is not one
+instruction; `scaffoldsft` is the module that turns a set into rows, and the
+summary reports the count instead of silently dropping it.
+
+To run it on a schedule:
+
+```bash
+cp deploy/vaca-harvest.service deploy/vaca-harvest.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now vaca-harvest.timer   # OnCalendar=monthly, Persistent=true
+systemctl --user list-timers | grep harvest
+```
+
+`harvest.status.json` holds the last run — month, runs read, tasks added, SFT
+rows — and the **Harvest builds** button in the library panel runs it on demand.
 
 ### Judge model
 
@@ -997,3 +1340,174 @@ python3 -m unittest discover -s tests -t . -v
 The suite runs real toolchains (Python is enough for the default path), fakes
 the LLM, and exercises the HTTP surface end to end. No network, no GPU, no
 third-party packages.
+
+## Run it (Linux and Windows)
+
+Nothing to install beyond Python 3.11+ and whatever toolchains you already use:
+the app is standard library only, with no build step and no packages.
+
+**Linux / macOS**
+
+```bash
+cd vaca-train-app
+./run-server.sh                      # http://127.0.0.1:8137/
+```
+
+**Windows**
+
+```bat
+cd vaca-train-app
+run-server.bat                       # http://127.0.0.1:8137/
+```
+
+Both launchers are thin wrappers around the real command, so use it directly if
+you prefer it on either platform:
+
+```bash
+python3 -m trainapp.server --host 127.0.0.1 --port 8137
+```
+
+`TRAIN_APP_DATA` moves the data directory (that is how the tests keep a clean
+one), and the connection list lives in `config.json` next to the code. Compiled
+languages need their compilers on `PATH`; **Source languages** above lists what
+each lane needs, and the app shows what it found under **Toolchains**.
+
+## The 2026 design: one board, four seats
+
+This build does not pass chat history between agents. Four seats share a single
+**blackboard** (`trainapp/board.py`) and each one is handed a filtered view of it:
+
+| seat | writes | reads |
+|---|---|---|
+| architect | `project_manifest` — the files and their jobs | the requirement only |
+| tech lead | `design_ledger` — logic, steps, edge cases | the manifest |
+| developer | `code_repository` — the code | manifest, ledger, code, bug tracker |
+| QA | `bug_tracker` — structured failures | code and manifest |
+
+A seat that writes a section it does not own raises, and so does one that reads
+one it has no claim on. That is what keeps a repair a repair: when a pass fails,
+the developer is handed **only the files QA blamed** plus their bugs — never the
+healthy files, so an untouched file cannot be quietly rewritten.
+
+The gate is not the reviewer's opinion. The set is compiled and run in a scratch
+directory, and when the board knows what a correct run prints, the output is
+compared: `--expect` from you, else the value read off the requirement itself
+(`"prints the sum of 2 and 3"` → `5`), else the architect's own claim. A program
+that exits 0 and prints the wrong thing fails, and QA cannot veto a build the
+gate verified — its note is recorded as advisory.
+
+**From the app.** Open **http://127.0.0.1:8137/**, then the *Orchestra* panel:
+say what to build, pick a language and a player, and press **Build**. The three
+optional fields are yours, not the architect's:
+
+- **Run it as** — the command the program must satisfy, e.g. `python cli.py notes.txt`
+- **A correct run prints** — the exact output, e.g. `total: 3`
+- **Files it reads** — one `PATH=CONTENT` per line, e.g. `notes.txt=alpha`
+
+Leave them blank and the run still works; it just knows less about what "right"
+means. The panel shows each seat's line as it happens and the **bug tracker pass
+by pass**, so a failing run is readable while it is still failing.
+
+**From a shell** — the same run, and the same contract:
+
+```bash
+python3 -m trainapp.orchestra \
+    --require "a python CLI that counts the lines in a file, exiting 1 if it is missing" \
+    --language python --player agent-stock --attempts 2 \
+    --smoke "python cli.py notes.txt" --input "notes.txt=alpha" --expect "1"
+```
+
+```text
+orchestra: qwen2.5-coder:14b · python · max 2 pass(es)
+  architect: 1 files, run `python cli.py notes.txt` (from the request)
+pass 1: failed · failing: cli.py
+    ✗ cli.py: the toolchain rejected it (run as: python3 cli.py notes.txt): …
+pass 2: passed
+built: data/band/<stamp>/<requirement>
+```
+
+Every run is copied to `data/band/<stamp>/<requirement>/`: `blueprint.json`
+(including who stated the invocation and the expectation), `reasoning.md`,
+`files/` (what shipped), `attempt-N/files/` (every pass), `bugs.jsonl` (the
+whole tracker, resolved entries included), `qa.jsonl`, `build.txt`,
+`state.json`, `notes.txt`. Nothing is deleted on a retry, so a failure stays
+readable after the fact.
+
+## Give it more than one model
+
+> **Run several connections, not the 14B on its own.** This version is built for
+> multiple LLM connections: a band where each seat can sit a different model.
+> Running the main `qwen2.5-coder:14b` solo for all four seats is the shape that
+> measured worst here and is not what this build is tuned for — point the seats
+> at different models before you judge a run.
+>
+> This is a temporary restriction, not a permanent rule: it is removed after
+> **December 2026** with the build notice above, once the retrained model ships
+> and a solo connection is a fair test again. Until then a solo run is an
+> experiment, not a measurement of this build.
+
+`config.json` holds the connections; each is a name, a URL, a model and a few
+options. Two are enough to start:
+
+```json
+{
+  "coder":  { "kind": "ollama", "url": "http://127.0.0.1:11434",
+              "model": "qwen2.5-coder:14b", "num_ctx": 8192, "timeout_s": 600 },
+  "architect": { "kind": "ollama", "url": "http://10.0.0.5:11434",
+              "model": "qwen3-coder:30b", "num_ctx": 16384, "timeout_s": 900 }
+}
+```
+
+Then either give a seat its own player for one run:
+
+```bash
+python3 -m trainapp.orchestra --require "…" --player coder \
+    --seat architect=architect --seat qa=architect
+```
+
+…or use the **Band** panel to add players, seat them and choose the leader, which
+is what the app then uses by default (`/api/band/*` does the same over HTTP).
+
+Why it matters: the four seats want different things from a model. The architect
+needs planning and has to resist inventing a file for a job that reads nothing;
+the developer needs strict formatting; QA needs to read code against a blueprint
+without inventing requirements. One model doing all four is the configuration
+that produced the drift this build was hardened against. A bigger solo model
+did not fix it in testing — a 14B seated alone scored *worse* on two-file builds
+than a smaller one — so vary the models before concluding a build is bad.
+
+## Retraining a new LLM
+
+The model is retraining from a clean base. The loop that produces the rows is the
+same one that judges them, so a round is only as good as what it can prove:
+
+```bash
+python3 -m trainapp.harvest --scan       # what is on disk right now
+python3 -m trainapp.harvest --dry-run    # what would become a library task
+python3 -m trainapp.harvest --monthly    # ingest, rebuild the index, cut the sheets
+python3 -m trainapp.battery --languages python --model base --out data/battery/base.json
+python3 train_lora.py --mode sft --train data/dataset/train.jsonl \
+    --val data/dataset/val.jsonl --model <hf-base> --out training/out/round1
+python3 -m trainapp.battery --adapter training/out/round1 \
+    --languages python --out data/battery/round1.json
+```
+
+Three rules make the difference between a round and a regression:
+
+1. **Only compared work becomes a row.** Harvest takes a run only when the gate
+   actually compared its output (`build.matches: true`). A pass that merely
+   exited 0 is logged and held back — the summary counts it as `unchecked`.
+   This is why the first ingest after this push adds only the verified builds and
+   not the whole history.
+2. **Score on held-out programs, both arms, same tasks.** `battery` runs the
+   base and the adapter over the same task file; a gain that does not survive
+   that pairing is noise, not progress.
+3. **Repair is trained, not assumed.** `data/dataset/corrections.jsonl` only
+   holds fixes that were re-run and passed, and `--mode orpo` trains on judged
+   pairs — style, not capability. Expect taste to improve before correctness.
+
+For a whole unattended cycle — probe, mine, train, score, judge, escalate — use
+`python3 -m trainapp.autoloop --cycles 3 --hours 6` (it refuses to promote a
+round that cannot be measured on a fresh pool). The data directories under
+`data/` are regenerated by these commands, so nothing in them needs to be
+committed for the app to run.

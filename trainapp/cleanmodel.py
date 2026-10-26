@@ -67,6 +67,9 @@ def sources() -> dict:
         "val": data / "val.jsonl",
         "pairs_train": data / "pairs_train.jsonl",
         "pairs_val": data / "pairs_val.jsonl",
+        # The contract rehearsal is part of the recipe now, so it is part of the
+        # provenance: an adapter's format lanes depend on which rows it ended on.
+        "rehearsal": data / "rehearsal.jsonl",
         "vaca_captures": capture.app_sheet_path(),
     }
     return {name: {"path": str(path), "rows": _rows(path), "sha256_16": _digest(path)}
@@ -143,7 +146,12 @@ def commands(out_dir: str = "data/models/clean1", *, steps: int = 120) -> list[s
          f"--model Qwen/Qwen2.5-Coder-1.5B-Instruct --out {out_dir} "
          f"--max-steps {steps}"),
         ("python3 train_lora.py --mode orpo --pairs data/dataset/pairs_train.jsonl "
-         f"--val-pairs data/dataset/pairs_val.jsonl --out {out_dir}-orpo --max-steps 60"),
+         f"--val-pairs data/dataset/pairs_val.jsonl --out {out_dir}-orpo --max-steps 40"),
+        ("python3 -c \"from trainapp import trainloop; "
+         "print(trainloop.rehearsal_sheet())\""),
+        ("python3 train_lora.py --mode sft --train data/dataset/rehearsal.jsonl "
+         f"--model Qwen/Qwen2.5-Coder-1.5B-Instruct --out {out_dir}-orpo/rehearsal "
+         f"--init-adapter {out_dir}-orpo/adapter --max-steps 15"),
         ("python3 -m trainapp.battery --model Qwen/Qwen2.5-Coder-1.5B-Instruct "
          f"--adapter {out_dir}/adapter --tasks 30"),
     ]

@@ -41,12 +41,14 @@ class OllamaClient:
     def __init__(self, model: str | None = None, url: str | None = None,
                  timeout_s: float | None = None, num_ctx: int | None = None,
                  temperature: float | None = None) -> None:
-        settings = config.load()["llm"]
+        settings = config.connection("coder")
         self.model = model or settings["model"]
         self.url = (url or settings["url"]).rstrip("/")
         self.timeout_s = timeout_s or settings["timeout_s"]
         self.num_ctx = num_ctx or settings.get("num_ctx", 8192)
         self.temperature = 0.2 if temperature is None else temperature
+        # A local server needs no key; a hosted player that has one is sent it.
+        self.api_key = str(settings.get("api_key") or "")
 
     def complete(self, prompt: str) -> str:
         body = json.dumps({
@@ -55,9 +57,12 @@ class OllamaClient:
             "stream": False,
             "options": {"temperature": self.temperature, "num_ctx": self.num_ctx},
         }).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
         request = urllib.request.Request(
             f"{self.url}/api/generate", data=body,
-            headers={"Content-Type": "application/json"}, method="POST",
+            headers=headers, method="POST",
         )
         try:
             with urllib.request.urlopen(request, timeout=self.timeout_s) as response:

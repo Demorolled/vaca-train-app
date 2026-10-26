@@ -6,6 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from trainapp import capture
 
@@ -37,6 +38,22 @@ class CaptureTests(unittest.TestCase):
         )
         row.update(overrides)
         return row
+
+    def test_a_named_sheet_can_be_left_out_of_the_mix(self) -> None:
+        """The tournament sheet is self-selected winners, not a verified program."""
+        keep = {"instruction": "write a go program", "input": "",
+                "output": "package main\n", "source": "vaca:knowledge"}
+        drop = {"instruction": "write a terse go program", "input": "",
+                "output": "package main // terse\n", "source": "tournament:winner"}
+        with mock.patch.object(capture, "load_rows", return_value=[]), \
+                mock.patch.object(capture, "load_app_rows", return_value=[keep, drop]):
+            meta = capture.export_dataset(drop_sources=("tournament:winner",))
+        self.assertEqual(meta["total_examples"], 1)
+        rows = [json.loads(line) for line in
+                (Path(self.tmp.name) / "dataset" / "train.jsonl").read_text().splitlines()]
+        rows += [json.loads(line) for line in
+                 (Path(self.tmp.name) / "dataset" / "val.jsonl").read_text().splitlines()]
+        self.assertEqual([r["source"] for r in rows], ["vaca:knowledge"])
 
     def test_verified_row_is_appended(self) -> None:
         ok, reason = capture.append_row(self.row())

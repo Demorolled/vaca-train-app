@@ -88,7 +88,7 @@ def _suffix(language: str) -> str:
     return "txt"
 
 
-def rows(per_plan: int = 2) -> list[dict]:
+def rows(per_plan: int = 2, all_languages: bool = False) -> list[dict]:
     """Distinct plans from the library's verified file sets, multi-file first.
 
     The library holds the same single-file plan (`main.ts (TypeScript) — entry
@@ -98,7 +98,7 @@ def rows(per_plan: int = 2) -> list[dict]:
     """
     from .functioneval import family_of  # local: keeps this module off the eval graph
 
-    tasks = sorted(library.load_tasks(),
+    tasks = sorted(library.load_tasks(all_languages=all_languages),
                    key=lambda t: (len(t.get("files") or []) == 0, str(t.get("id"))))
     seen: dict[str, int] = {}
     out: list[dict] = []

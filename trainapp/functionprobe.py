@@ -27,10 +27,17 @@ BRACE_LANGS = {"go", "rust", "c", "cpp", "csharp", "java", "javascript",
 SCRIPT_LANGS = {"python", "ruby"}
 LANGUAGES = BRACE_LANGS | SCRIPT_LANGS
 
-CONTROL = re.compile(r"^\s*(if|for|while|switch|catch|else|do|try|finally|return|"
+# `foreach` was missing here, and PHP has no entry in SIGNATURES, so every
+# `foreach ($x as $y) {` matched GENERIC: the probe then asked the model for "this
+# foreach" and spliced a whole function over the loop body. 190 night asks did
+# exactly that and the compiler answered "Cannot redeclare function".
+CONTROL = re.compile(r"^\s*(if|for|foreach|while|switch|catch|else|do|try|finally|return|"
                      r"guard|defer)\b")
 SIGNATURES = {
     "go": re.compile(r"^func\s+(\([^)]*\)\s*)?(\w+)\s*\("),
+    # `function name(` with any modifier run, and the by-reference `&` form.
+    "php": re.compile(r"^\s*(?:(?:public|protected|private|static|final|abstract)\s+)*"
+                      r"function\s+&?\s*(\w+)\s*\("),
     "rust": re.compile(r"^\s*(pub\s+)?(async\s+)?fn\s+(\w+)\s*[<(]"),
     "python": re.compile(r"^(\s*)def\s+(\w+)\s*\("),
     "ruby": re.compile(r"^\s*def\s+(self\.)?(\w+[?!=]?)"),
@@ -204,13 +211,14 @@ def entry_for(task: dict) -> str:
     return task["target"] if execution.is_entry_name(task["target"]) else ""
 
 
-def run_set(task: dict, target_code: str, timeout_s: float = 25, probes=None):
+def run_set(task: dict, target_code: str, timeout_s: float = 25, probes=None,
+            compile_only: bool = False):
     files = [{"path": f["path"],
               "content": target_code if f["path"] == task["target"] else f["content"]}
              for f in task["files"]]
     probe = runprobe.for_task(task, probes)
     return execution.run_files(files, task["language"], entry=entry_for(task),
-                               timeout_s=timeout_s,
+                               timeout_s=timeout_s, compile_only=compile_only,
                                args=list(probe["args"]) if probe else None)
 
 
@@ -219,11 +227,59 @@ def siblings(task: dict) -> str:
                        for f in task["files"] if f["path"] != task["target"])
 
 
+IMPORT_LINE = {
+    "python": re.compile(r"^\s*(import|from)\s+\w"),
+    "ruby": re.compile(r"^\s*(require|require_relative)\b"),
+    "c": re.compile(r"^\s*#include\b"),
+    "cpp": re.compile(r"^\s*#include\b"),
+    "go": re.compile(r"^\s*(import\b|\"[\w./]+\"|\))"),
+    "rust": re.compile(r"^\s*(use|extern\s+crate)\b"),
+    "php": re.compile(r"^\s*(require|require_once|include|include_once|use)\b"),
+}
+DEFAULT_IMPORT = re.compile(r"^\s*(import|using|use|package)\b")
+
+
+def import_lines(language: str, code: str, limit: int = 24) -> list[str]:
+    """The top-level imports the target file already has, as written.
+
+    The ask used to hide these. The model was told not to invent members while
+    being shown the siblings and the signature but never the file's own import
+    list, so it reached for `sort.Slice` in a file that never imported `sort`:
+    490 of Go's 803 night failures are `undefined: <package>`, 280 of them
+    `sort`/`io`/`ioutil`/`time`/`strconv`/`fmt`. The one list that would have
+    settled it was the one the prompt left out.
+    """
+    pattern = IMPORT_LINE.get(language, DEFAULT_IMPORT)
+    out: list[str] = []
+    in_block = False
+    for line in code.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//") or stripped.startswith("#!"):
+            continue
+        if stripped.startswith("import (") and language == "go":
+            in_block = True
+        if pattern.match(line) or (in_block and stripped):
+            out.append(stripped)
+            if in_block and stripped == ")":
+                in_block = False
+        elif out and not in_block:
+            break  # imports end at the first non-import line
+        if len(out) >= limit:
+            break
+    return out
+
+
 def prompt_parts(task: dict, fn: dict) -> tuple[str, str]:
     """(instruction, input) in the trainer's SFT shape."""
     instruction = INSTRUCTION.format(target=task["target"], language=task["language"])
     spec = (task.get("description") or task.get("title") or "").strip()
     parts = [f"### Function signature\n{fn['signature']}"]
+    target = target_of(task)
+    imports = import_lines(task.get("language", ""),
+                           (target or {}).get("content", ""))
+    if imports:
+        parts.append("### Imports already in this file (declare nothing else)\n"
+                     + "\n".join(imports))
     if spec:
         parts.append(f"### What it must do\n{spec}")
     parts.append(f"### Sibling files (authoritative)\n{siblings(task)}")
@@ -238,6 +294,24 @@ def prompt_for(task: dict, fn: dict) -> str:
 def collapse(text: str) -> str:
     """Whitespace-insensitive comparison, as the tournament compares stdout."""
     return " ".join((text or "").split())
+
+
+def diagnostic(result) -> str:
+    """Why a set failed, from whichever stream actually carried it.
+
+    483 of the night's failed attempts recorded `compile: false` with an empty
+    error: a checker that says nothing on some failures, or a run that exits
+    non-zero having printed nothing, left nothing to learn from. The streams are
+    tried in order, then the exit code — not a diagnosis, but evidence that
+    something ran and failed, which is the difference between "unknown" and
+    "no reason at all".
+    """
+    text = " ".join((result.error or result.stderr or result.stdout or "").split())
+    if text:
+        return text[:400]
+    if result.exit_code is not None:
+        return f"exited {result.exit_code} with no output"
+    return "no output and no exit code: the step never started"
 
 
 def probe(task: dict, client, timeout_s: float = 25, reference: str | None = None,
@@ -279,7 +353,7 @@ def probe(task: dict, client, timeout_s: float = 25, reference: str | None = Non
         "compile": got.ok, "match": match, "reference": reference,
         "reference_ok": bool(reference_ok),
         "stdout": collapse(got.stdout)[:400],
-        "error": (got.error or got.stderr or "")[:400],
+        "error": diagnostic(got),
         "instruction": instruction, "input": given,
         "prompt": prompt, "reply": reply,
         "raw_reply": raw if raw.strip() != reply.strip() else "",
@@ -303,6 +377,23 @@ def candidates() -> list[dict]:
             if groups[language]:
                 out.append(groups[language].pop(0))
     return out
+
+
+def pool_candidates() -> list[dict]:
+    """Verified file sets a frozen held-out pool may name, lane cut or not.
+
+    The pools are frozen so cycles stay comparable, but `candidates()` is scoped
+    to the five lanes and the cut came after the pools were first built. Resolving
+    a pool through `candidates()` therefore *silently drops* the sets the champion
+    was scored on: the champion's 20/70 came from all 76 sets, while every
+    candidate since the cut was scored on the 53 that survived it, and the two
+    rates were never the same measurement. A frozen pool is resolved whole.
+    """
+    validation = library.load_validation()
+    return [t for t in library.load_tasks(all_languages=True)
+            if library.is_multi_file(t)
+            and t.get("language") in LANGUAGES
+            and (validation.get(t["id"]) or {}).get("status") == "verified"]
 
 
 def references(tasks: list[dict], timeout_s: float = 25) -> dict[str, tuple[bool, str]]:

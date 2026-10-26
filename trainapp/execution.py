@@ -732,9 +732,10 @@ def _set_plan(lang: str, scratch: Path, entry: str, paths: list[str],
               args: list[str] | None = None) -> list[tuple[list[str], Path]]:
     """(check steps, run steps) for a file set, as argv + cwd.
 
-    `args` is only set by the observable probe: a set asked to print something
-    with `--help` or a fixture argument. Without it every plan stays exactly as
-    it was, so scoring and the battery are unaffected.
+    `args` is set only by a caller that knows the invocation — the observable
+    probe with `--help` or a fixture argument, the builder's `run` command, the
+    orchestra's blueprint. Without it every plan stays exactly as it was, so
+    scoring and the battery are unaffected.
     """
     tail = list(args or [])
     runnable = Path(scratch / entry)

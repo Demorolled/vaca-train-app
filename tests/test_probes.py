@@ -169,6 +169,130 @@ class GateTests(unittest.TestCase):
         self.assertEqual((by_id["reason-prime"]["passed_runs"], by_id["reason-prime"]["runs"]),
                          (2, 3))
 
+    def test_a_split_probe_is_rechecked_before_it_counts(self) -> None:
+        """2/3 is not a verdict: a second batch decides the pooled majority."""
+        calls = {"prime": 0}
+
+        class Split:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def complete(self, prompt: str) -> str:
+                if "Is 17 prime" in prompt:
+                    calls["prime"] += 1
+                    # two of the first three pass, all three of the recheck fail
+                    return ("Yes — 17 is prime." if calls["prime"] in (2, 3)
+                            else "def is_prime(n):\n    return True\n")
+                if "23 * 47" in prompt:
+                    return "1081"
+                return GOOD_GO
+
+            def close(self) -> None:
+                pass
+
+        with mock.patch("trainapp.localcoder.LocalCoder", Split):
+            result = probes.evaluate("fake/model", samples=3, confirm=3,
+                                     temperature=0.7)
+        failed = {f["id"]: f["reason"] for f in result["failures"]}
+        self.assertIn("reason-prime", failed)
+        self.assertIn("2/6 runs passed", failed["reason-prime"])
+        self.assertEqual(result["rechecked"], ["reason-prime"])
+        rows = [json.loads(line) for line in
+                (Path(self.tmp.name) / "probes" / "probes.jsonl").read_text().splitlines()]
+        row = {r["id"]: r for r in rows[-1]["rows"]}["reason-prime"]
+        self.assertEqual((row["passed_runs"], row["runs"], row["rechecked"]),
+                         (2, 6, True))
+
+    def test_a_contested_probe_that_survives_the_recheck_keeps_its_point(self) -> None:
+        calls = {"plan": 0}
+        good = "src/main.rs (Rust) — word counting CLI\n"
+        bad = "".join(f"src/m{i}.rs (Rust) — module {i}\n" for i in range(10))
+
+        class Recovers:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def complete(self, prompt: str) -> str:
+                if "Rust CLI that counts words" in prompt:
+                    calls["plan"] += 1
+                    # 2/3 first, 2/3 again: 4/6 pooled, a pass
+                    return bad if calls["plan"] in (1, 6) else good
+                if "Is 17 prime" in prompt:
+                    return "Yes — 17 is prime."
+                if "23 * 47" in prompt:
+                    return "1081"
+                return GOOD_GO
+
+            def close(self) -> None:
+                pass
+
+        with mock.patch("trainapp.localcoder.LocalCoder", Recovers):
+            result = probes.evaluate("fake/model", samples=3, confirm=3,
+                                     temperature=0.7)
+        self.assertIn("plan-rust", result["passed_ids"])
+        self.assertEqual(result["rechecked"], ["plan-rust"])
+        self.assertEqual(calls["plan"], 6)
+
+    def test_an_unanimous_probe_is_not_asked_again(self) -> None:
+        calls = {"prime": 0}
+
+        class Steady:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def complete(self, prompt: str) -> str:
+                if "Is 17 prime" in prompt:
+                    calls["prime"] += 1
+                    return "Yes — 17 is prime."
+                if "23 * 47" in prompt:
+                    return "1081"
+                return GOOD_GO
+
+            def close(self) -> None:
+                pass
+
+        with mock.patch("trainapp.localcoder.LocalCoder", Steady):
+            result = probes.evaluate("fake/model", samples=3, confirm=3,
+                                     temperature=0.7)
+        self.assertEqual(calls["prime"], 3)
+        self.assertEqual(result["rechecked"], [])
+
+    def test_the_gate_asks_the_coder_for_the_app_sampling(self) -> None:
+        """Greedy decodes are one answer printed three times, not three samples."""
+        seen: dict = {}
+
+        class Coder:
+            def __init__(self, *args, **kwargs) -> None:
+                seen.update(kwargs)
+
+            def complete(self, prompt: str) -> str:
+                return GOOD_GO
+
+            def close(self) -> None:
+                pass
+
+        with mock.patch("trainapp.localcoder.LocalCoder", Coder):
+            probes.evaluate("fake/model", samples=3, confirm=3,
+                            temperature=0.7, top_p=0.9)
+        self.assertEqual((seen["temperature"], seen["top_p"]), (0.7, 0.9))
+
+    def test_a_greedy_gate_says_its_samples_are_not_independent(self) -> None:
+        notes: list[str] = []
+
+        class Coder:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def complete(self, prompt: str) -> str:
+                return GOOD_GO
+
+            def close(self) -> None:
+                pass
+
+        with mock.patch("trainapp.localcoder.LocalCoder", Coder):
+            probes.evaluate("fake/model", samples=3, log=notes.append)
+        self.assertTrue(any("repeat one decode" in line for line in notes))
+
 
 if __name__ == "__main__":
     unittest.main()

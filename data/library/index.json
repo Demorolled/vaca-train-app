@@ -1,13 +1,13 @@
 {
-  "total": 2602,
-  "all_languages": 4375,
+  "total": 2653,
+  "all_languages": 4465,
   "by_language": {
-    "typescript": 1263,
-    "go": 302,
-    "c": 245,
-    "java": 254,
-    "python": 283,
-    "javascript": 255
+    "typescript": 1272,
+    "go": 310,
+    "c": 251,
+    "java": 263,
+    "python": 294,
+    "javascript": 263
   },
   "by_origin": {
     "code-bible": 904,
@@ -17,10 +17,11 @@
     "vaca-export": 327,
     "base-build": 600,
     "medium-build": 600,
-    "cli-set": 64
+    "cli-set": 64,
+    "distiller-build": 51
   },
-  "runnable": 1698,
-  "multi_file": 391,
+  "runnable": 1749,
+  "multi_file": 442,
   "vaca_root": "/home/homellmlab/Desktop/visual-ai-architect",
   "focus": [
     "JavaScript/TypeScript",

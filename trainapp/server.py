@@ -18,8 +18,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from . import (capture, config, execution, grow, judge, library, preferences,
-               repair, scoreboard, tournament, training, validate)
+from . import (band, builder, capture, config, execution, grow, harvest, judge,
+               library, orchestra, preferences, repair, scaffold, scoreboard,
+               tournament, training, validate)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,80}$")
@@ -31,6 +32,11 @@ class ApiError(Exception):
         super().__init__(message)
         self.status = status
         self.message = message
+
+
+def _refused(err: KeyError) -> ApiError:
+    """A refusal in its own words, without Python's extra layer of quoting."""
+    return ApiError(400, str(err.args[0]) if err.args else str(err))
 
 
 # ── nodes ─────────────────────────────────────────────────────────────────────
@@ -111,7 +117,9 @@ def route(method: str, path: str, payload: dict) -> dict:
 
     if parts == ["api", "config"] and method == "GET":
         cfg = config.load()
-        cfg["llm"].pop("api_key", None)
+        for value in cfg.values():
+            if isinstance(value, dict):
+                value.pop("api_key", None)
         return {"config": cfg}
 
     if parts == ["api", "config"] and method == "POST":
@@ -227,6 +235,157 @@ def route(method: str, path: str, payload: dict) -> dict:
 
     if parts == ["api", "judge", "health"] and method == "GET":
         return judge.health()
+
+    # Who is doing what: role -> connection, with the model behind each one.
+    # Selecting a model for a role is a config write, so a whole series can be
+    # built by one model and replayed by another without touching code.
+    if parts == ["api", "roles"] and method == "GET":
+        assigned = config.roles()
+        connections = config.connections()
+        return {"roles": {role: {"connection": name,
+                                 "model": (connections.get(name) or {}).get("model", ""),
+                                 "url": (connections.get(name) or {}).get("url", "")}
+                          for role, name in assigned.items()},
+                "connections": {name: {"model": value.get("model", ""),
+                                       "url": value.get("url", "")}
+                                for name, value in connections.items()}}
+    if parts == ["api", "roles"] and method == "POST":
+        role = str(payload.get("role") or "")
+        name = str(payload.get("connection") or "")
+        if not role or not name:
+            raise ApiError(400, "role and connection are required")
+        try:
+            return {"roles": config.assign(role, name)}
+        except KeyError as err:
+            raise _refused(err) from err
+
+    # ── band ──
+    # Every connection is a player: a toggle, a seat, and a leader. Adding one
+    # is a config write, so a whole band can be assembled from the UI without a
+    # code path changing.
+    if parts == ["api", "band"] and method == "GET":
+        return band.summary()
+
+    if parts == ["api", "band", "add"] and method == "POST":
+        try:
+            return band.add(
+                name=str(payload.get("name") or ""),
+                model=str(payload.get("model") or ""),
+                url=str(payload.get("url") or ""),
+                kind=str(payload.get("kind") or "openai"),
+                timeout_s=float(payload.get("timeout_s") or 600),
+                max_tokens=int(payload.get("max_tokens") or 6000),
+                temperature=float(payload.get("temperature") or 0.2),
+                think=bool(payload.get("think", False)),
+                num_ctx=int(payload.get("num_ctx") or 0),
+                api_key=str(payload.get("api_key") or ""),
+            )
+        except KeyError as err:
+            raise _refused(err) from err
+
+    if parts == ["api", "band", "toggle"] and method == "POST":
+        try:
+            return band.toggle(str(payload.get("name") or ""),
+                               bool(payload.get("enabled", True)))
+        except KeyError as err:
+            raise _refused(err) from err
+
+    if parts == ["api", "band", "seat"] and method == "POST":
+        try:
+            return band.seat(str(payload.get("role") or ""),
+                             str(payload.get("name") or ""))
+        except KeyError as err:
+            raise _refused(err) from err
+
+    if parts == ["api", "band", "leader"] and method == "POST":
+        try:
+            return band.set_leader(str(payload.get("name") or ""))
+        except KeyError as err:
+            raise _refused(err) from err
+
+    if parts == ["api", "band", "copy"] and method == "POST":
+        return band.set_copy_builds(bool(payload.get("enabled", True)))
+
+    if parts == ["api", "band", "probe"] and method == "POST":
+        try:
+            return {"probe": band.probe(str(payload.get("name") or ""),
+                                        timeout_s=float(payload.get("timeout_s") or 5))}
+        except KeyError as err:
+            raise _refused(err) from err
+
+    if parts == ["api", "band", "remove"] and method == "POST":
+        try:
+            return band.remove(str(payload.get("name") or ""))
+        except KeyError as err:
+            raise _refused(err) from err
+
+    # ── orchestra ──
+    # Four seats build one app. The run is minutes long, so it is a job like the
+    # builder's: started here, watched through its status, copied on completion.
+    if parts == ["api", "orchestra", "status"] and method == "GET":
+        return orchestra.status()
+
+    if parts == ["api", "orchestra", "start"] and method == "POST":
+        # `smoke`, `inputs` and `expect` are the caller's own statement of how
+        # the program is exercised. They outrank the architect's blueprint, so
+        # the test data is not written by the model being tested. `inputs` is a
+        # mapping, or the `PATH=CONTENT` strings the CLI takes.
+        raw_inputs = payload.get("inputs")
+        try:
+            inputs = (orchestra.parse_inputs(list(raw_inputs))
+                      if isinstance(raw_inputs, list) else dict(raw_inputs or {}))
+        except (TypeError, ValueError) as err:
+            raise ApiError(400, str(err)) from err
+        started = orchestra.start(
+            requirement=str(payload.get("requirement") or ""),
+            language=str(payload.get("language") or "python"),
+            player=str(payload.get("player") or ""),
+            attempts=int(payload.get("attempts") or orchestra.MAX_ATTEMPTS),
+            smoke=str(payload.get("smoke") or ""),
+            inputs=inputs,
+            expect=str(payload.get("expect") or ""),
+        )
+        if started.get("error"):
+            raise ApiError(409, started["error"])
+        return started
+
+    # ── harvest ──
+    # Every finished build is evidence. This reads the copies on disk, adds the
+    # verified ones to the library and writes the month's sheet.
+    if parts == ["api", "harvest", "status"] and method == "GET":
+        return harvest.status()
+
+    if parts == ["api", "harvest", "run"] and method == "POST":
+        return harvest.run(dry_run=bool(payload.get("dry_run", False)),
+                           force=bool(payload.get("force", False)))
+
+    if parts == ["api", "harvest", "scan"] and method == "GET":
+        return harvest.scan()
+
+    # ── builder ──
+    # A build is minutes of a model's time, so the series runs on a thread and
+    # the UI watches it: the pool is written after each app, which means a
+    # series that is interrupted still keeps the apps it finished.
+    if parts == ["api", "builder", "status"] and method == "GET":
+        return {**builder.status(), "pool": builder.index(),
+                "scaffold": scaffold.summary()}
+
+    if parts == ["api", "builder", "start"] and method == "POST":
+        languages = payload.get("languages") or None
+        if isinstance(languages, str):
+            languages = [x.strip().lower() for x in languages.split(",") if x.strip()]
+        elif languages:
+            languages = [str(x).strip().lower() for x in languages]
+        started = builder.start(
+            languages=list(languages) if languages else None,
+            apps=int(payload.get("apps", 1) or 1),
+            attempts=int(payload["attempts"]) if payload.get("attempts") else None,
+            brief=str(payload.get("brief") or "").strip(),
+            connection=str(payload.get("connection") or "").strip(),
+        )
+        if started.get("error"):
+            raise ApiError(409, started["error"])
+        return started
 
     if parts == ["api", "scoreboard"] and method == "GET":
         return scoreboard.summary()

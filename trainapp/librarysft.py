@@ -18,7 +18,9 @@ from __future__ import annotations
 
 from . import library
 
-ORIGINS = ("base-build", "medium-build")
+# Builds the app produced itself (see `harvest.py`) are the same kind of
+# evidence: a whole program a model wrote that the real toolchain then ran.
+ORIGINS = ("base-build", "medium-build", "band-build")
 INSTRUCTION = ("Write a {language} program: {title}. It must compile and run on "
                "its own, standard library only. Reply with the complete file.")
 
@@ -47,18 +49,20 @@ def _one_per_program(rows: list[dict], per_language: int) -> list[dict]:
     return out
 
 
-def rows(per_language: int = 1) -> list[dict]:
+def rows(per_language: int = 1, all_languages: bool = False) -> list[dict]:
     """One SFT row per verified base/medium build, deduped by instruction+code.
 
     `per_language` is how many builds of the same program in the same language
-    survive (default 1, see `_one_per_program`).
+    survive (default 1, see `_one_per_program`). `all_languages` reads the sheet
+    outside the five-lane focus, which is how the lane-cut experiment trains on
+    the corpus it had before the cut.
     """
     from .functioneval import family_of  # local: keeps this module off the eval graph
 
     validation = library.load_validation()
     seen: set[tuple[str, str]] = set()
     out: list[dict] = []
-    for task in library.load_tasks():
+    for task in library.load_tasks(all_languages=all_languages):
         if task.get("origin") not in ORIGINS:
             continue
         if library.is_multi_file(task):

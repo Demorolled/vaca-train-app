@@ -22,6 +22,24 @@ TASK = {
 }
 
 
+SET_TASK = {
+    "id": "test/two-file",
+    "origin": "distiller-build",
+    "language": "python",
+    "title": "two-file counter",
+    "description": "main.py imports lib.py and prints the number of words",
+    "files": [
+        {"path": "lib.py", "content": "def words(text):\n    return text.split()\n"},
+        {"path": "main.py",
+         "content": "from lib import words\n\nprint(len(words('a b c')))\n"},
+    ],
+    "target": "main.py",
+    "code": "from lib import words\n\nprint(len(words('a b c')))\n",
+    "runnable": True,
+    "tags": [],
+}
+
+
 class FakeCoder:
     def __init__(self, replies: dict[str, str]) -> None:
         self.replies = replies
@@ -173,6 +191,48 @@ class TournamentTests(unittest.TestCase):
             self.assertEqual(tournament.status()["state"], "idle")
         finally:
             path.unlink()
+
+    def test_a_file_set_is_restyled_one_target_file_at_a_time(self) -> None:
+        coder = FakeCoder({
+            "terse": "from lib import words\nprint(len(words('a b c')))\n",
+            "readable": ("from lib import words\n\ntext = 'a b c'\n"
+                         "print(len(words(text)))\n"),
+            "functional": "from lib import missing\nprint(1)\n",  # breaks the set
+        })
+        result = tournament.run_task(
+            SET_TASK, styles=["terse", "readable", "functional"],
+            run_timeout_s=15, repeats=1, coder=coder, judge_fn=fake_judge)
+
+        self.assertIn("TARGET FILE: main.py", coder.prompts[0])
+        statuses = {v["style"]: v["valid"] for v in result["variants"]}
+        self.assertTrue(statuses["terse"])
+        self.assertTrue(statuses["readable"])
+        self.assertFalse(statuses["functional"])
+        self.assertEqual(result["winner"]["style"], "terse")
+        self.assertTrue(result["pairs"])
+        for pair in result["pairs"]:
+            self.assertEqual(pair["kind"], "scaffold")
+            self.assertEqual(pair["target"], "main.py")
+            self.assertIn("### Response", pair["prompt"])
+        row = result["capture_row"]
+        self.assertTrue(row["meta"]["scaffold"])
+        self.assertIn("TARGET FILE: main.py", row["input"])
+
+    def test_a_set_without_a_target_cannot_be_restyled(self) -> None:
+        with self.assertRaises(ValueError):
+            tournament.run_task({**SET_TASK, "target": "nope.py"},
+                                styles=["terse"], run_timeout_s=15, repeats=1,
+                                coder=FakeCoder({}), judge_fn=fake_judge)
+
+    def test_choose_tasks_can_take_sets_from_one_origin(self) -> None:
+        self.seed(TASK)
+        self.seed(SET_TASK)
+        self.seed({**SET_TASK, "id": "test/other-set", "origin": "vaca-export"})
+        chosen = tournament.choose_tasks(library.confirmed(), 10, sets=True,
+                                         origin="distiller-build")
+        self.assertEqual([t["id"] for t in chosen], [SET_TASK["id"]])
+        self.assertEqual([t["id"] for t in tournament.choose_tasks(
+            library.confirmed(), 10)], [TASK["id"]])
 
     def test_winner_is_captured_as_a_training_row(self) -> None:
         self.seed(TASK)

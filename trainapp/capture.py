@@ -381,16 +381,18 @@ def stats() -> dict:
 
 
 def export_dataset(val_ratio: float = 0.1,
-                   extra_rows: list[dict] | None = None) -> dict:
+                   extra_rows: list[dict] | None = None,
+                   drop_sources: tuple[str, ...] = ()) -> dict:
     """Write train.jsonl / val.jsonl / dataset_meta.json from the sheet.
 
     The split is hash-based, so adding rows never reshuffles the existing
     train/val boundary — a re-export cannot silently leak a val row into train.
     `extra_rows` lets another proof-gated source (verified library builds) join
-    the same split without inventing a second dataset format.
+    the same split without inventing a second dataset format. `drop_sources`
+    leaves a named sheet out of the mix for a reason the caller states.
     """
-    corrections = load_rows()
-    app_rows = load_app_rows()
+    corrections = [r for r in load_rows() if r.get("source") not in drop_sources]
+    app_rows = [r for r in load_app_rows() if r.get("source") not in drop_sources]
     extra_rows = list(extra_rows or [])
     # Corrections first: a fix the harness proved wins over an imported app row
     # with the same instruction+output, because it carries the error context.

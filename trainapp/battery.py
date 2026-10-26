@@ -202,6 +202,39 @@ def failure_reason(result: dict) -> str:
         "reference does not compile/run here"
 
 
+def language_stats(rows: list[dict]) -> dict[str, dict]:
+    """One arm's rates per language — which lanes paid for a gain.
+
+    The total hides the shape that matters: an adapter can trade five TypeScript
+    compiles for six Java behaviours and look flat. Split by language, the same
+    run says where the code stopped building.
+    """
+    buckets: dict[str, dict] = {}
+    for row in rows:
+        lang = row.get("language", "")
+        bucket = buckets.setdefault(lang, {"attempts": 0, "verified": 0,
+                                           "behavior_checked": 0,
+                                           "behavior_matched": 0, "bytes": 0})
+        valid = bool(row.get("valid"))
+        bucket["attempts"] += 1
+        bucket["verified"] += 1 if valid else 0
+        if row.get("deterministic"):
+            bucket["behavior_checked"] += 1
+            bucket["behavior_matched"] += 1 if row.get("stdout_match") else 0
+        if valid:
+            bucket["bytes"] += int(row.get("bytes", 0) or 0)
+    for bucket in buckets.values():
+        attempts = bucket["attempts"]
+        bucket["verify_rate"] = round(bucket["verified"] / attempts, 4) if attempts else 0.0
+        checked = bucket["behavior_checked"]
+        bucket["behavior_rate"] = (round(bucket["behavior_matched"] / checked, 4)
+                                    if checked else 0.0)
+        bucket["avg_bytes"] = (round(bucket["bytes"] / bucket["verified"])
+                                if bucket["verified"] else 0)
+        del bucket["bytes"]
+    return dict(sorted(buckets.items()))
+
+
 def score(rows: list[dict]) -> dict:
     """Rates for one arm. `behavior` only counts tasks with a stable reference."""
     attempts = [r for r in rows if not r.get("skipped")]
@@ -210,11 +243,7 @@ def score(rows: list[dict]) -> dict:
     matched = [r for r in behavioral if r.get("stdout_match")]
     scaffolds = [r for r in verified if r.get("scaffold")]
     adherence_scores = [r.get("adherence", 0.0) for r in scaffolds]
-    by_language: dict[str, dict] = {}
-    for row in attempts:
-        bucket = by_language.setdefault(row.get("language", ""), {"attempts": 0, "verified": 0})
-        bucket["attempts"] += 1
-        bucket["verified"] += 1 if row.get("valid") else 0
+    by_language = language_stats(attempts)
     return {
         "attempts": len(attempts),
         "verified": len(verified),
@@ -348,6 +377,11 @@ def main(argv: list[str] | None = None) -> int:
               f"({stats['verify_rate']:.0%})  behavior {stats['behavior_matched']}/"
               f"{stats['behavior_checked']} ({stats['behavior_rate']:.0%})  "
               f"{stats['avg_bytes']} B  {stats['avg_runtime_ms']} ms")
+        for lang, lane in stats["by_language"].items():
+            print(f"  {lang:11s} verify {lane['verified']:3d}/{lane['attempts']:3d} "
+                  f"({lane['verify_rate']:5.1%})  behavior "
+                  f"{lane['behavior_matched']:3d}/{lane['behavior_checked']:3d} "
+                  f"({lane['behavior_rate']:5.1%})  {lane['avg_bytes']:4d} B")
     return 0
 
 

@@ -35,16 +35,26 @@ it — the map behind the build rather than another guess at the destination.
 Learn from something that already works, re-derive it in your own stack, or pull
 a finished app apart to see exactly how it holds together.
 
-### Dual LLM connections, with real controls
+### Multiple LLM connections, with real controls
 
-VACA now supports **two model connections side by side**, each with its own
+VACA now supports **several model connections side by side**, each with its own
 setup and controls. Reasoning, scaffolding, planning and generation can be
 routed to whichever model you choose for the job — a fast model for the scaffold,
-a deeper one for the architecture, or the same pair swapped per task.
+a deeper one for the architecture, or the seats swapped per task. This build
+ships with three connections and the band takes any number you add, by URL alone.
 
-That is not a convenience feature, it is a quality one: two different minds
+That is not a convenience feature, it is a quality one: different minds
 attacking the same build produce **more diverse** results, and diversity is what
 keeps a build from collapsing into one model's habits.
+
+**Do not run the main `qwen2.5-coder:14b` on every seat for now.** One stock
+model sitting alone in all four seats is the shape that measured worst here — it
+drifts on the blueprint and then fails the job it designed. Point the seats at
+different models before you judge a run.
+
+That restriction is temporary, not a permanent rule: it is removed after
+**December 2026**, together with this notice, once the retrained model is the one
+that ships and a solo connection is a fair test again.
 
 ### Drag and drop, and a second tree
 
@@ -76,3 +86,14 @@ direction at once.
 
 Thank you for watching the rebuild. The best version of VACA is the one being
 built right now.
+
+---
+
+**This notice is temporary.** It comes down after **December 2026**, once the
+clean base has passed its probes and the rebuild is simply the build: the banner
+at the top of the README, this file, anything else that says "rebuilding", and
+the note above about not running one model on every seat all go with it. Until
+then it stays, so nobody has to infer the churn from the diff.
+
+The harness described in the README runs today — the notice is about the model,
+not the app.

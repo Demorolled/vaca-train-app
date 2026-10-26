@@ -30,7 +30,7 @@ JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
 def _chat(messages: list[dict], *, url: str | None = None, model: str | None = None,
           timeout_s: float | None = None, max_tokens: int | None = None,
           temperature: float | None = None) -> str:
-    settings = config.load()["judge"]
+    settings = config.connection("judge")
     base = (url or settings["url"]).rstrip("/")
     if not base.endswith("/v1"):
         base += "/v1"
@@ -41,9 +41,13 @@ def _chat(messages: list[dict], *, url: str | None = None, model: str | None = N
         "temperature": settings["temperature"] if temperature is None else temperature,
         "stream": False,
     }).encode("utf-8")
+    headers = {"Content-Type": "application/json"}
+    key = str(settings.get("api_key") or "")
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     request = urllib.request.Request(
         base + "/chat/completions", data=body,
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=headers, method="POST")
     with urllib.request.urlopen(request, timeout=timeout_s or settings["timeout_s"]) as response:
         payload = json.loads(response.read().decode("utf-8"))
     return ((payload.get("choices") or [{}])[0].get("message") or {}).get("content", "") or ""
@@ -137,7 +141,7 @@ def compare(task: dict, reference: str, a: dict, b: dict) -> dict:
 
 def health() -> dict:
     """Is the judge model actually being served?"""
-    settings = config.load()["judge"]
+    settings = config.connection("judge")
     base = settings["url"].rstrip("/")
     root = base[:-3] if base.endswith("/v1") else base
     try:

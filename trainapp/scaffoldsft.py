@@ -35,12 +35,12 @@ def is_trainable(task: dict, share: int = TRAIN_SHARE) -> bool:
     return bucket(task.get("id", "")) < max(0, min(100, share))
 
 
-def rows(share: int = TRAIN_SHARE) -> list[dict]:
+def rows(share: int = TRAIN_SHARE, all_languages: bool = False) -> list[dict]:
     """One SFT row per verified, trainable multi-file set."""
     validation = library.load_validation()
     seen: set[tuple[str, str]] = set()
     out: list[dict] = []
-    for task in library.load_tasks():
+    for task in library.load_tasks(all_languages=all_languages):
         if not library.is_multi_file(task):
             continue
         if (validation.get(task.get("id", "")) or {}).get("status") != "verified":

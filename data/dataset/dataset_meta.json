@@ -1,15 +1,15 @@
 {
-  "total_examples": 3097,
-  "train_examples": 2785,
-  "val_examples": 312,
+  "total_examples": 1030,
+  "train_examples": 921,
+  "val_examples": 109,
   "val_ratio": 0.1,
   "source": "train-app:verified-fix",
   "sources": {
-    "corrections": 286,
+    "corrections": 1,
     "vaca": 108,
-    "extra": 2716
+    "extra": 930
   },
-  "exported_at": "2026-10-23T00:35:40+00:00",
+  "exported_at": "2026-10-25T15:22:21+00:00",
   "train_path": "/home/homellmlab/Desktop/vaca-train-app/data/dataset/train.jsonl",
   "val_path": "/home/homellmlab/Desktop/vaca-train-app/data/dataset/val.jsonl"
 }

@@ -64,18 +64,26 @@ def collect_pairs() -> list[dict]:
 
 
 def to_training_pair(pair: dict) -> dict:
-    prompt = PROMPT_TEMPLATE.format(
+    """One ORPO row. A pair that carried its own ask keeps it.
+
+    A scaffold pair is asked the way the app asks — a target file with its
+    siblings in view — and that prompt is the half the pair teaches against,
+    so it is carried through rather than rebuilt from the title.
+    """
+    prompt = (pair.get("prompt") or "").strip() or PROMPT_TEMPLATE.format(
         language=pair.get("language", "unknown"),
         title=(pair.get("title") or "").strip(),
         task=(pair.get("task") or "").strip() or "Make it work.",
     )
     return {
-        "prompt": prompt,
+        "prompt": prompt + ("\n" if not prompt.endswith("\n") else ""),
         "chosen": pair["chosen"].strip() + "\n",
         "rejected": pair["rejected"].strip() + "\n",
         "meta": {
             "task_id": pair.get("task_id", ""),
             "language": pair.get("language", ""),
+            "kind": pair.get("kind", "single"),
+            "target": pair.get("target", ""),
             "chosen_style": pair.get("chosen_style", ""),
             "rejected_style": pair.get("rejected_style", ""),
             "chosen_bytes": pair.get("chosen_bytes", 0),

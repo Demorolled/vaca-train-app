@@ -34,12 +34,13 @@ REPAIR_INSTRUCTION = (
 DEAD_NAMES = ("x", "tmp", "unused", "count", "n")
 
 
-def _invent_rows(share: int = scaffoldsft.TRAIN_SHARE) -> list[dict]:
+def _invent_rows(share: int = scaffoldsft.TRAIN_SHARE,
+                 all_languages: bool = False) -> list[dict]:
     """One row per verified multi-file set: answer with the target file alone."""
     validation = library.load_validation()
     out: list[dict] = []
     seen: set[str] = set()
-    for task in library.load_tasks():
+    for task in library.load_tasks(all_languages=all_languages):
         if not library.is_multi_file(task):
             continue
         if (validation.get(task.get("id", "")) or {}).get("status") != "verified":
@@ -75,12 +76,13 @@ def _broken(code: str, name: str) -> tuple[str, int] | None:
     return None
 
 
-def _repair_rows(per_family: int = 2) -> list[dict]:
+def _repair_rows(per_family: int = 2,
+                 all_languages: bool = False) -> list[dict]:
     """Verified Go builds, broken by a dead declaration, repaired by the original."""
     validation = library.load_validation()
     counts: dict[str, int] = {}
     out: list[dict] = []
-    for task in library.load_tasks():
+    for task in library.load_tasks(all_languages=all_languages):
         if task.get("language") != "go" or library.is_multi_file(task):
             continue
         if (validation.get(task.get("id", "")) or {}).get("status") != "verified":
@@ -108,8 +110,10 @@ def _repair_rows(per_family: int = 2) -> list[dict]:
     return out
 
 
-def rows(share: int = scaffoldsft.TRAIN_SHARE) -> list[dict]:
-    return _invent_rows(share) + _repair_rows()
+def rows(share: int = scaffoldsft.TRAIN_SHARE,
+         all_languages: bool = False) -> list[dict]:
+    return (_invent_rows(share, all_languages)
+            + _repair_rows(all_languages=all_languages))
 
 
 def stats() -> dict:
