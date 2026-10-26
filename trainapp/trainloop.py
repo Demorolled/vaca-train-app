@@ -23,8 +23,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import (buildfix, capture, config, contractsft, functioneval, functionprobe,
-               librarysft, overnight, plansft, preferences, probes, puzzlepairs,
-               scaffoldsft)
+               librarysft, overnight, planpick, plansft, preferences, probes,
+               puzzlepairs, scaffoldsft, seatplay, verdictpick)
 
 MIN_GAIN = 0.005
 STATUS_FILE = "trainloop.status.json"
@@ -171,6 +171,28 @@ def merge_pairs(extra_rows: list[dict], val_ratio: float = 0.1) -> dict:
 DROPPED_SOURCES = ("tournament:winner",)
 
 
+def seat_miss_pairs(held: set[str] | None = None) -> list[dict]:
+    """Misses `seatplay` banked, minus any that touch a held-out family."""
+    path = seatplay.pairs_path()
+    if not path.is_file():
+        return []
+    out: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        task_id = (row.get("meta") or {}).get("task_id")
+        if held and task_id in held:
+            continue
+        if row.get("prompt") and row.get("chosen") and row.get("rejected"):
+            out.append(row)
+    return out
+
+
 def prepare_data(by_family: bool = False, per_language: int = 3,
                  all_languages: bool = False, mix: str = "all",
                  with_buildfix: bool = False) -> dict:
@@ -229,15 +251,32 @@ def prepare_data(by_family: bool = False, per_language: int = 3,
     buildfix_pairs = ([p for p in buildfix.pairs()
                        if (p.get("meta") or {}).get("family") not in held_families]
                       if with_buildfix else [])
+    # Seat rows are judgements, not programs: a QA verdict labelled by the
+    # toolchain and a plan choice labelled by the shipped set. They obey the
+    # same programs-only switch as the plan and contract sheets, because they
+    # teach a seat's decision, not a program the battery scores.
+    qa_rows = [] if programs_only else verdictpick.rows()
+    plan_pick_rows = ([r for r in planpick.rows(all_languages=all_languages)
+                       if (r.get("meta") or {}).get("task_id") not in held]
+                      if not programs_only else [])
     sft = capture.export_dataset(
         extra_rows=(library_rows + plan_rows + contract_rows + scaffold_rows
-                    + fresh + buildfix_rows),
+                    + qa_rows + plan_pick_rows + fresh + buildfix_rows),
         drop_sources=DROPPED_SOURCES)
     tournament = preferences.export_pairs()
     puzzle_rows = puzzlepairs.training_rows()
-    pairs = merge_pairs(puzzle_rows + night_pairs + buildfix_pairs)
+    # A puzzle pair, a seat miss and a QA disagreement are the same object: a
+    # prompt where one answer is provably better than the other. Merging them
+    # here is what makes a round train on the seats it is scored against.
+    seat_pairs = ([p for p in planpick.pairs(all_languages=all_languages)
+                   if (p.get("meta") or {}).get("task_id") not in held]
+                  + verdictpick.pairs() + seat_miss_pairs(held))
+    pairs = merge_pairs(puzzle_rows + night_pairs + buildfix_pairs + seat_pairs)
     return {"sft": sft, "tournament": tournament, "pairs": pairs,
             "puzzle_pairs": len(puzzle_rows),
+            "qa_rows": len(qa_rows),
+            "plan_pick_rows": len(plan_pick_rows),
+            "seat_pairs": len(seat_pairs),
             "dropped_sources": list(DROPPED_SOURCES),
             "library_rows": len(library_rows),
             "plan_rows": len(plan_rows),
@@ -310,9 +349,45 @@ def _probe(model: str, adapter: Path, log) -> dict | None:
         return None
 
 
+def _play_seats(limit: int, log) -> dict:
+    """Play the seat sheets against the band leader and bank the misses.
+
+    This is the part that makes the loop self-feeding: the rows a round trains on
+    are the rows a seat just failed. A dead player is reported and skipped — a
+    round may still train on what the last play produced.
+    """
+    from . import builder  # local: only a real play needs the chat client
+
+    rows = verdictpick.rows(limit=limit) + planpick.rows(limit=limit)
+    if not rows:
+        return {"played": 0, "pairs": 0, "reason": "no seat rows on disk"}
+    try:
+        chat = builder.chat_for()
+        report = seatplay.play(rows, chat, limit=limit)
+    except Exception as err:
+        log.write(f"[{_now()}] seatplay failed: {type(err).__name__}: {err}\n")
+        log.flush()
+        return {"played": 0, "pairs": 0, "error": f"{type(err).__name__}: {err}"}
+    if report.get("error"):
+        log.write(f"[{_now()}] seatplay player failed: {report['error']}\n")
+        log.flush()
+        return {"played": report.get("played", 0), "pairs": 0,
+                "error": report["error"]}
+    if report["pairs"]:
+        seatplay.write_pairs(report["pairs"])
+    log.write(f"[{_now()}] seatplay: {report['played']} played, "
+              f"{report['correct']} correct, {report['wrong']} wrong, "
+              f"{report['unparsed']} unreadable, {len(report['pairs'])} pair(s)\n")
+    log.flush()
+    return {"played": report["played"], "correct": report["correct"],
+            "wrong": report["wrong"], "unparsed": report["unparsed"],
+            "accuracy": report["accuracy"], "pairs": len(report["pairs"])}
+
+
 def run(rounds: int = 2, sft_steps: int = 120, orpo_steps: int = 60,
         seq_len: int = 1024, skip_sft: bool = False, probe_gate: bool = True,
-        by_family: bool = False, rehearsal_steps: int = REHEARSAL_STEPS) -> dict:
+        by_family: bool = False, rehearsal_steps: int = REHEARSAL_STEPS,
+        seat_plays: int = 0) -> dict:
     log_path = loop_dir() / LOG_FILE
     models_dir = config.data_dir() / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
@@ -322,6 +397,10 @@ def run(rounds: int = 2, sft_steps: int = 120, orpo_steps: int = 60,
     with log_path.open("a", encoding="utf-8") as log:
         publish(state="running", stage="data", round=0, error="", started_at=_now(),
                 finished_at="", log=str(log_path), base_model=base_model)
+        if seat_plays > 0:
+            publish(stage="seatplay", round=0)
+            played = _play_seats(seat_plays, log)
+            publish(seatplay=played)
         data = prepare_data(by_family)
         log.write(f"\n[{_now()}] data prepared: {json.dumps(data)}\n")
         log.flush()
@@ -452,6 +531,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-sft", action="store_true")
     parser.add_argument("--no-probe-gate", action="store_true",
                         help="keep a round on held-out accuracy alone")
+    parser.add_argument("--seat-plays", type=int, default=0,
+                        help="play N seat rows against the band leader and train "
+                             "on the misses before the round starts")
     args = parser.parse_args(argv)
 
     if args.prepare_only:
@@ -459,7 +541,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     result = run(args.rounds, args.sft_steps, args.orpo_steps,
                  args.seq_len, args.skip_sft, not args.no_probe_gate,
-                 args.family_holdout)
+                 args.family_holdout, seat_plays=args.seat_plays)
     print(json.dumps(result, indent=2))
     return 0 if result.get("state") == "done" else 1
 
